@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseInline, parseMarkdown, safeHref } from './markdown.js';
+import { parseInline, parseMarkdown, safeHref } from './markdownParse.js';
 
 describe('release-notes Markdown', () => {
   it('parses headings, lists, code and paragraphs', () => {

@@ -7,7 +7,7 @@
 
 ## Context
 
-The owner tested beta.3 on Windows and asked for five changes in 0.1.0-beta.4:
+The owner tested beta.3 on Windows and asked for five changes in 0.1.0-beta.5:
 
 - Georgian has to look right in the terminal and in the UI.
 - There should be no forced first-run import.
@@ -66,7 +66,7 @@ password.
   section of `CHANGELOG.md` (`scripts/changelog.mjs`). A tag without a
   section fails before anything is built.
 - **Version.** `package.json` now carries the full version
-  (`0.1.0-beta.4`). Before this, every beta was `0.1.0`, so the app could
+  (`0.1.0-beta.5`). Before this, every beta was `0.1.0`, so the app could
   not tell betas apart. File names include the suffix.
 
 ### Liquid glass theme (default), Classic kept

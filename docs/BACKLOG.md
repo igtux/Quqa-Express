@@ -355,7 +355,7 @@ instead of a zip.
   checksums; README install section matches.
 - **Port:** — (new).
 
-## 0.1.0-beta.4: owner feedback on beta.3
+## 0.1.0-beta.5: owner feedback on beta.3
 
 **Status: done.** Design: ADR 0006.
 

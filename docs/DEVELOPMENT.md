@@ -140,15 +140,15 @@ failing test run also writes one annotation listing every failed test
 
 To release:
 
-1. Set the full version in `package.json`, suffix included (`0.1.0-beta.4`).
-2. Add its section to `CHANGELOG.md` (`## [0.1.0-beta.4] - <date>`).
-   `node scripts/changelog.mjs v0.1.0-beta.4` prints what the release body
+1. Set the full version in `package.json`, suffix included (`0.1.0-beta.5`).
+2. Add its section to `CHANGELOG.md` (`## [0.1.0-beta.5] - <date>`).
+   `node scripts/changelog.mjs v0.1.0-beta.5` prints what the release body
    and the app's update panel will show. A tag without a section fails.
 3. Commit, then push an annotated tag:
 
 ```sh
-git tag -a v0.1.0-beta.4 -m "quqa-express 0.1.0 beta 4"
-git push origin v0.1.0-beta.4
+git tag -a v0.1.0-beta.5 -m "quqa-express 0.1.0 beta 5"
+git push origin v0.1.0-beta.5
 ```
 
 `.github/workflows/release.yml` checks that the tag matches the version (a

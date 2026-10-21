@@ -4,7 +4,11 @@ All notable changes to quqa-express. Each release's section is also the
 start of its GitHub release notes and of what the in-app update panel shows
 (`scripts/changelog.mjs`, `.github/workflows/release.yml`).
 
-## [0.1.0-beta.4] - 2026-10-21
+## [0.1.0-beta.5] - 2026-10-21
+
+The 0.1.0-beta.4 tag was never published: its Windows build failed because
+two source files differed only in letter case. This release has everything
+planned for beta.4.
 
 ### Added
 
@@ -35,7 +39,7 @@ start of its GitHub release notes and of what the in-app update panel shows
 - Zoom shortcuts (Ctrl+= / Ctrl+- / Ctrl+0) also go by physical key, like the
   other shortcuts, so they work with Georgian, Russian and other layouts.
 - The version in `package.json` now carries the pre-release suffix, so files
-  are named `quqa-express-0.1.0-beta.4-setup.exe`.
+  are named `quqa-express-0.1.0-beta.5-setup.exe`.
 
 ## [0.1.0-beta.3] - 2026-10-21
 

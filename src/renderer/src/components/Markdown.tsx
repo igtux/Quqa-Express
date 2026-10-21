@@ -1,11 +1,11 @@
 /**
- * Renders release notes (markdown.ts) as React elements: no HTML is ever
+ * Renders release notes (markdownParse.ts) as React elements: no HTML is ever
  * parsed. A link asks first, then opens in the system browser (main allows
  * only http and https).
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import { Dialog } from './Dialog.js';
-import { parseMarkdown, type Inline } from './markdown.js';
+import { parseMarkdown, type Inline } from './markdownParse.js';
 
 function inlines(items: Inline[], onLink: (href: string) => void): ReactNode[] {
   return items.map((item, index) => {

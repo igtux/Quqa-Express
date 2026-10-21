@@ -1,7 +1,7 @@
 // Prints one version's section of CHANGELOG.md (without its heading), for
 // the GitHub release body. Fails when the version has no section, so every
 // release has notes.
-//   node scripts/changelog.mjs 0.1.0-beta.4
+//   node scripts/changelog.mjs 0.1.0-beta.5
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 

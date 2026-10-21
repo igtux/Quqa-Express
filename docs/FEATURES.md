@@ -67,8 +67,8 @@ Short names used below:
 | xterm.js with WebGL renderer, DOM fallback when WebGL fails | `term/connection.ts` | v1 | Same; Chromium in Electron makes WebGL reliable. |
 | Unicode 11 widths, fixed 16-colour ANSI palette, `minimumContrastRatio` 4.5, 10 000 lines scrollback, cursor blink | `term/connection.ts`, `term/themes.ts` | v1 | Same options; scrollback length becomes a setting. |
 | 20 colour schemes (Default Dark, Dracula, Nord, Monokai, Gruvbox, One Dark, Tokyo Night, Catppuccin, Ayu, Night Owl, Material, Synthwave 84, Cobalt2, Horizon, Palenight, Everforest, Kanagawa, Rosé Pine, Solarized Dark, GitHub Dark) | `term/themes.ts` | v1 | Ported as is. **Built (Phase 3).** |
-| 12 font stacks, each led by BPG Courier so Georgian fills one cell; web fonts bundled and awaited before measuring | `term/themes.ts` | v1 | Fonts bundled in the app (no font CDN: offline). **Built (Phase 3) as stacks. 0.1.0-beta.4 bundles BPG Courier (terminal) and Noto Sans Georgian (UI and Mtavruli), loads them before glyphs are cached and redraws the WebGL atlas when they arrive (ADR 0006). The Latin web fonts are not bundled.** |
-| Terminal Theme dialog: schemes, fonts, live preview, Apply restyles every open terminal | `term/ThemeModal.tsx` | v1 | Same; stored in local settings. **Built (Phase 3), also holds the notification switches; renamed "Look and notifications" in 0.1.0-beta.4 with the app theme (Liquid glass, the default, or Classic).** |
+| 12 font stacks, each led by BPG Courier so Georgian fills one cell; web fonts bundled and awaited before measuring | `term/themes.ts` | v1 | Fonts bundled in the app (no font CDN: offline). **Built (Phase 3) as stacks. 0.1.0-beta.5 bundles BPG Courier (terminal) and Noto Sans Georgian (UI and Mtavruli), loads them before glyphs are cached and redraws the WebGL atlas when they arrive (ADR 0006). The Latin web fonts are not bundled.** |
+| Terminal Theme dialog: schemes, fonts, live preview, Apply restyles every open terminal | `term/ThemeModal.tsx` | v1 | Same; stored in local settings. **Built (Phase 3), also holds the notification switches; renamed "Look and notifications" in 0.1.0-beta.5 with the app theme (Liquid glass, the default, or Classic).** |
 | Font size ladder by window width + zoom −/+ (6–24 px), remembered | `term/themes.ts`, `term/TerminalModal.tsx` | v1 | Same, plus Ctrl+= / Ctrl+- / Ctrl+0. **Built (Phase 3); zoom is saved in the vault, Ctrl+= / Ctrl+- / Ctrl+0.** |
 | Per-host / per-tab theme override | — | v1.x | New: a host may carry its own scheme (e.g. red for production). **Built early (Phase 3): colour scheme and font per host.** |
 | Fit pipeline (fonts ready, debounce, ResizeObserver), resize sent to the PTY | `term/connection.ts` | v1 | Same; resize is an IPC intent to the engine. |
@@ -258,11 +258,11 @@ Short names used below:
 | Portable exe, profile next to the exe | — | v1 | **Built (Phase 5):** `quqa-express-<version>-portable.exe`, data in `quqa-express-data\`. |
 | Unsigned builds, SHA256SUMS.txt, GitHub (pre-)releases from tags | — | v1 | **Built (Phase 5):** `.github/workflows/release.yml`; SmartScreen note and checksum steps in README and release notes (ADR 0005). |
 | App icon, About (version, licence, source, origin) | — | v1 | **Built (Phase 5):** F1 → About quqa-express. |
-| First run: create the vault, then offer to import hosts (ssh config, with key files), known_hosts and keys | — | v1 | **Built (Phase 5). Since 0.1.0-beta.4 it is not forced: the app goes straight to the hosts screen, whose empty state and toolbar offer "Import from ~/.ssh".** |
-| Lost master password: "Forgot password? Start over" moves the vault to `vault-backups/<time>/` after typing DELETE | — | v1 | **Built (0.1.0-beta.4, ADR 0006).** |
-| App theme: Liquid glass (default; Windows 11 acrylic) or Classic | — | v1 | **Built (0.1.0-beta.4, ADR 0006).** |
+| First run: create the vault, then offer to import hosts (ssh config, with key files), known_hosts and keys | — | v1 | **Built (Phase 5). Since 0.1.0-beta.5 it is not forced: the app goes straight to the hosts screen, whose empty state and toolbar offer "Import from ~/.ssh".** |
+| Lost master password: "Forgot password? Start over" moves the vault to `vault-backups/<time>/` after typing DELETE | — | v1 | **Built (0.1.0-beta.5, ADR 0006).** |
+| App theme: Liquid glass (default; Windows 11 acrylic) or Classic | — | v1 | **Built (0.1.0-beta.5, ADR 0006).** |
 | Window size, position and maximized state remembered; one instance (a second start focuses the window) | — | v1 | **Built (Phase 5)**; single instance since Phase 1. |
-| Update check: badge, release notes, Update now (installer verified against SHA256SUMS.txt) / Later / Skip | — | v1 | **Built (0.1.0-beta.4, ADR 0006):** on by default, opt-out in About; the portable build opens the release page. |
+| Update check: badge, release notes, Update now (installer verified against SHA256SUMS.txt) / Later / Skip | — | v1 | **Built (0.1.0-beta.5, ADR 0006):** on by default, opt-out in About; the portable build opens the release page. |
 | Build provenance attestations, SBOM, code signing | — | later | Left out to keep releases simple. |
 
 ## v1 at a glance

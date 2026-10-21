@@ -224,7 +224,7 @@ with `quqa-<32 hex>` names; the hosts screen measures latency with a TCP
 connect to each saved SSH port; desktop notifications are shown by main.
 See [ADR 0003](0003-hosts-and-sessions.md).
 
-## Addendum (2026-10-21, 0.1.0-beta.4)
+## Addendum (2026-10-21, 0.1.0-beta.5)
 
 The update check (§8) is **on by default** at the owner's request, with an
 opt-out in About. It is the one network call besides SSH, made by main and
