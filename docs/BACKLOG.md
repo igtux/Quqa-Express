@@ -372,6 +372,10 @@ instead of a zip.
   - a badge and a panel with the notes rendered as safe Markdown,
   - Update now (download, verify against SHA256SUMS.txt, run the installer;
     the portable build opens the page), Later, and Skip this version,
+  - 0.1.0-beta.6: the portable exe updates itself (download next to it,
+    verify, "Restart to update" swaps it in under the same name through a
+    PowerShell helper; rollback on failure; Windows CI runs the helper),
+    and downloads can be cancelled.
   - `CHANGELOG.md` feeds the release body.
 - Liquid glass, the default theme, with Classic selectable. Windows 11 uses
   acrylic. Screenshots of every screen come from `test/ui/look.spec.ts`.

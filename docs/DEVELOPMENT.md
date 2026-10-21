@@ -158,7 +158,17 @@ publishes the setup exe, the portable exe and `SHA256SUMS.txt`. The notes
 start with the changelog section, followed by the SmartScreen and checksum
 notes. It uses only `GITHUB_TOKEN`. Installed apps find the release through
 the update check (ADR 0006). The installed build verifies the setup exe
-against `SHA256SUMS.txt` before it runs it, so both files must be attached.
+against `SHA256SUMS.txt` before it runs it, and the portable build verifies
+the portable exe before it swaps itself for it, so all three files must be
+attached.
+
+The portable swap helper (`src/main/portable-update.ts`) is a PowerShell
+script, so it is only really tested on Windows:
+`test/windows/portable-swap.test.ts` runs it in a folder named with spaces,
+Georgian letters, an apostrophe and brackets (skipped elsewhere). CI's
+Windows build job runs it again with the freshly built portable exe
+(`QUQA_TEST_PORTABLE_EXE`). If a user reports a failed update, their
+`quqa-express-data\updates\update.log` says which step failed.
 
 ## Layout
 

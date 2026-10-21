@@ -81,8 +81,12 @@ so to carry it to another PC create it with a master password and tick
 **Updates.** At start and every 6 hours the app asks GitHub whether a newer
 release is out. If one is, a small badge in the top bar shows what's new.
 **Update now** downloads the installer, checks it against the release's
-`SHA256SUMS.txt` and runs it. The portable build opens the download page
-instead. Turn the check off in F1 → About.
+`SHA256SUMS.txt` and runs it. The portable exe downloads the new portable
+exe, checks it the same way and, on **Restart to update**, replaces itself
+under the same file name (the old one stays in
+`quqa-express-data\updates\previous.exe`). In a folder it cannot write to
+(a read-only stick, Program Files) it opens the download page instead. Turn
+the check off in F1 → About.
 
 Apart from that update check, the app makes no network connections of its
 own and has no telemetry. The only other connections are the SSH sessions

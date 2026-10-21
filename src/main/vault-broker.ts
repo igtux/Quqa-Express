@@ -205,6 +205,10 @@ export class VaultBroker {
         return { ok: true, value: await this.deps.updater.check() };
       case 'updates.install':
         return { ok: true, value: this.deps.updater.install() };
+      case 'updates.cancel':
+        return { ok: true, value: this.deps.updater.cancel() };
+      case 'updates.restart':
+        return { ok: true, value: await this.deps.updater.restart() };
       case 'updates.skip':
         return {
           ok: true,

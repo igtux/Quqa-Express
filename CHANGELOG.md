@@ -4,6 +4,27 @@ All notable changes to quqa-express. Each release's section is also the
 start of its GitHub release notes and of what the in-app update panel shows
 (`scripts/changelog.mjs`, `.github/workflows/release.yml`).
 
+## [0.1.0-beta.6] - 2026-10-21
+
+### Added
+
+- **The portable exe updates itself.** When a new version is out, **Update
+  now** downloads the new portable exe into `quqa-express-data\updates\`
+  next to your exe, with a progress bar and a **Cancel download** button,
+  and checks it against the release's `SHA256SUMS.txt`; a file that does not
+  match is deleted and never run. **Restart to update** then closes the app,
+  puts the new exe in place under the same file name (your shortcuts keep
+  working), checks it once more and starts it. The old version is kept as
+  `quqa-express-data\updates\previous.exe`. If anything goes wrong, the old
+  exe is put back and started, and `updates\update.log` says why.
+- If the portable exe sits in a folder it cannot write to (a read-only USB
+  stick, Program Files), the update panel says so and offers the download
+  page instead.
+
+### Changed
+
+- The installer download can be cancelled too.
+
 ## [0.1.0-beta.5] - 2026-10-21
 
 The 0.1.0-beta.4 tag was never published: its Windows build failed because

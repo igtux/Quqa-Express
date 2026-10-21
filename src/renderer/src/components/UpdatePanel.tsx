@@ -2,8 +2,9 @@
  * "Update available": a small badge in the top bar (only when there is a
  * newer release) and the panel it opens, with the version, its date and the
  * release notes. "Update now" downloads and checks the installer (installed
- * builds) or opens the release page (portable); "Skip this version" hides the
- * badge until a newer one is out.
+ * builds) or the new portable exe (portable build, then "Restart to update"),
+ * or opens the release page; a download can be cancelled. "Skip this version"
+ * hides the badge until a newer one is out.
  */
 import { useState } from 'react';
 import type { UpdateState } from '../../../shared/ipc.js';
@@ -24,13 +25,17 @@ export function UpdateBadge() {
   const state = useUpdates();
   const [open, setOpen] = useState(false);
   if (!state?.available) return null;
-  const busy = state.phase !== 'idle';
+  const busy = isBusy(state.phase);
   return (
     <>
       <button
         type="button"
         className={`app-bar-btn update-badge${busy ? ' busy' : ''}`}
-        title={`quqa-express ${state.available.version} is available`}
+        title={
+          state.phase === 'ready'
+            ? `quqa-express ${state.available.version} is ready: restart to update`
+            : `quqa-express ${state.available.version} is available`
+        }
         aria-label="Update available"
         onClick={() => setOpen(true)}
       >
@@ -42,19 +47,36 @@ export function UpdateBadge() {
   );
 }
 
-const PHASE_TEXT: Record<UpdateState['phase'], string> = {
-  idle: '',
-  downloading: 'Downloading…',
-  verifying: 'Checking the download against SHA256SUMS.txt…',
-  starting: 'Starting the installer; quqa-express closes now.',
-};
+const isBusy = (phase: UpdateState['phase']) => phase !== 'idle' && phase !== 'ready';
+
+function phaseText(state: UpdateState): string {
+  switch (state.phase) {
+    case 'downloading':
+      return 'Downloading…';
+    case 'verifying':
+      return 'Checking the download against SHA256SUMS.txt…';
+    case 'starting':
+      return state.method === 'portable'
+        ? 'Restarting into the new version…'
+        : 'Starting the installer; quqa-express closes now.';
+    default:
+      return '';
+  }
+}
+
+function submitLabel(state: UpdateState): string {
+  if (state.method === 'page') return 'Open download page';
+  return state.phase === 'ready' ? 'Restart to update' : 'Update now';
+}
 
 export function UpdatePanel({ onClose }: { onClose(): void }) {
   const state = useUpdates();
   const [problem, setProblem] = useState<string | null>(null);
   const available = state?.available;
   if (!state || !available) return null;
-  const busy = state.phase !== 'idle';
+  const busy = isBusy(state.phase);
+  const ready = state.phase === 'ready';
+  const downloading = state.phase === 'downloading' || state.phase === 'verifying';
   const run = (action: () => Promise<void>, close = false) => {
     setProblem(null);
     action().then(
@@ -72,18 +94,26 @@ export function UpdatePanel({ onClose }: { onClose(): void }) {
       className="update-panel"
       onClose={onClose}
       cancelLabel="Later"
-      submitLabel={state.method === 'installer' ? 'Update now' : 'Open download page'}
+      submitLabel={submitLabel(state)}
       busy={busy}
-      onSubmit={() => run(() => updates.install(), state.method === 'page')}
+      onSubmit={() =>
+        run(() => (ready ? updates.restart() : updates.install()), state.method === 'page')
+      }
       footer={
-        <button
-          type="button"
-          className="link-btn"
-          disabled={busy}
-          onClick={() => run(() => updates.skip(available.version), true)}
-        >
-          Skip this version
-        </button>
+        downloading || ready ? (
+          <button type="button" className="link-btn" onClick={() => run(() => updates.cancel())}>
+            {ready ? 'Discard download' : 'Cancel download'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="link-btn"
+            disabled={busy}
+            onClick={() => run(() => updates.skip(available.version), true)}
+          >
+            Skip this version
+          </button>
+        )
       }
     >
       <div className="update-head">
@@ -99,14 +129,22 @@ export function UpdatePanel({ onClose }: { onClose(): void }) {
       )}
       {busy && (
         <div className="update-progress" role="status">
-          <span>{PHASE_TEXT[state.phase]}</span>
+          <span>{phaseText(state)}</span>
           <progress max={1} value={state.progress ?? undefined} />
         </div>
       )}
+      {ready && (
+        <p className="system-hint" role="status">
+          Downloaded and checked against SHA256SUMS.txt. <strong>Restart to update</strong> closes
+          quqa-express (open terminals end; tmux sessions can be re-attached), replaces this exe
+          under the same name and starts the new version. The old one is kept in
+          quqa-express-data\updates\previous.exe.
+        </p>
+      )}
       {state.method === 'page' && !busy && (
         <p className="system-hint">
-          This copy cannot update itself (portable or development build): the release page opens in
-          your browser.
+          {state.pageReason ??
+            'This copy cannot update itself (development build): the release page opens in your browser.'}
         </p>
       )}
       {(problem ?? state.error) && (

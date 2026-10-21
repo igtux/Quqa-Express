@@ -78,6 +78,8 @@ export interface Release {
   /** The release page on github.com. */
   page: string;
   setup: ReleaseAsset | null;
+  /** The portable exe, which the portable build swaps in for itself. */
+  portable: ReleaseAsset | null;
   sums: ReleaseAsset | null;
 }
 
@@ -129,6 +131,7 @@ export function parseRelease(raw: unknown): Release | null {
     notes: releaseNotes(text(r['body'], 200_000) ?? ''),
     page,
     setup: find(`quqa-express-${name}-setup.exe`),
+    portable: find(`quqa-express-${name}-portable.exe`),
     sums: find('SHA256SUMS.txt'),
   };
 }

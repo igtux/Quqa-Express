@@ -20,7 +20,8 @@ function set(next: UpdateState) {
 
 function schedule() {
   clearTimeout(timer);
-  const busy = state !== null && (state.checking || state.phase !== 'idle');
+  const busy =
+    state !== null && (state.checking || (state.phase !== 'idle' && state.phase !== 'ready'));
   // Main's first check runs a few seconds after start.
   const waiting = state !== null && state.autoUpdate && state.checkedAt === null;
   timer = setTimeout(() => void refresh(), busy ? 700 : waiting ? 3000 : 5 * 60_000);
@@ -44,6 +45,12 @@ export const updates = {
   },
   async install(): Promise<void> {
     set(await call('updates.install', {}));
+  },
+  async cancel(): Promise<void> {
+    set(await call('updates.cancel', {}));
+  },
+  async restart(): Promise<void> {
+    set(await call('updates.restart', {}));
   },
   async skip(version: string): Promise<void> {
     set(await call('updates.skip', { version }));

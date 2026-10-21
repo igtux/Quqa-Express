@@ -594,12 +594,19 @@ export const UpdateState = obj({
     }),
     Type.Null(),
   ]),
-  /** What "Update now" does: run the verified installer, or open the release page. */
-  method: Type.Union([Type.Literal('installer'), Type.Literal('page')]),
+  /**
+   * What "Update now" does: run the verified installer, download the verified
+   * portable exe to swap in on restart, or open the release page.
+   */
+  method: Type.Union([Type.Literal('installer'), Type.Literal('portable'), Type.Literal('page')]),
+  /** With method 'page' when this build could otherwise update itself: why it cannot. */
+  pageReason: Type.Union([Type.String({ maxLength: 400 }), Type.Null()]),
+  /** `ready`: the portable exe is downloaded and verified, waiting for "Restart to update". */
   phase: Type.Union([
     Type.Literal('idle'),
     Type.Literal('downloading'),
     Type.Literal('verifying'),
+    Type.Literal('ready'),
     Type.Literal('starting'),
   ]),
   /** Download progress 0–1 while downloading. */
@@ -692,8 +699,15 @@ export const AppCalls = {
   },
   'updates.status': { params: Empty, result: UpdateState },
   'updates.check': { params: Empty, result: UpdateState },
-  /** Downloads, verifies and runs the installer (installed builds), or opens the release page. */
+  /**
+   * Downloads and verifies the installer and runs it (installed builds), or the
+   * portable exe (portable build, then `ready`), or opens the release page.
+   */
   'updates.install': { params: Empty, result: UpdateState },
+  /** Stops a download, or drops a verified portable exe that was not applied. */
+  'updates.cancel': { params: Empty, result: UpdateState },
+  /** Portable, `ready`: start the swap helper and quit; the new version starts. */
+  'updates.restart': { params: Empty, result: UpdateState },
   'updates.skip': { params: obj({ version: VersionText }), result: UpdateState },
   'keys.list': { params: Empty, result: obj({ keys: Type.Array(KeyInfo) }) },
   'keys.generate': { params: obj({ label: Label }), result: KeyInfo },

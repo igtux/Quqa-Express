@@ -55,7 +55,8 @@ password.
 
   Only then is it started, detached, and the app quits. The vault is outside
   the install folder, so it stays. The portable exe, and any build that
-  cannot update itself, opens the release page instead. electron-updater
+  cannot update itself, opens the release page instead (superseded for the
+  portable exe in 0.1.0-beta.6: see the addendum below). electron-updater
   was not used: it adds a runtime dependency and wants `latest.yml`
   metadata, and a small downloader with a checksum check is about 150 lines
   of our own code.
@@ -141,3 +142,78 @@ password.
   slow machines.
 - The BPG Courier GPL notice must ship with every build (it does, via
   `extraResources`).
+
+## Addendum (0.1.0-beta.6): portable self-update
+
+### Context
+
+The owner wants the portable exe to update itself, like the installed build.
+electron-builder's portable target is an NSIS stub: it unpacks the app to a
+temp folder, sets `PORTABLE_EXECUTABLE_FILE` (the real exe) and
+`PORTABLE_EXECUTABLE_DIR`, runs the app with `ExecWait` and deletes the temp
+folder afterwards. So the user's exe stays open, held by the stub, for as
+long as the app runs, and a running exe cannot be overwritten.
+
+### Decision
+
+- **Where.** `src/main/portable-update.ts` (plain Node, no Electron). The
+  real exe path is resolved to its final long form (`realpathSync.native`,
+  so an 8.3 short name never renames the file) and checked: a drive-letter
+  or UNC path, no device paths (`\\?\`, `\\.\`), no `.`/`..` segments,
+  no characters Windows forbids, no streams, no bidi controls, at most 259
+  characters (Windows PowerShell 5.1 still trips over `MAX_PATH`), and its
+  folder must equal `PORTABLE_EXECUTABLE_DIR`. A path that fails gets the
+  download page with the reason.
+- **Writable?** After a check finds a release, main creates
+  `quqa-express-data\updates\` and writes and deletes a probe file there and
+  next to the exe. If that fails (read-only stick, Program Files), "Update
+  now" becomes "Open download page" with an explanation.
+- **Download.** The release's `quqa-express-<ver>-portable.exe` (same URL,
+  redirect-host, size and `SHA256SUMS.txt` checks as the installer) goes to
+  `updates\<name>.partial` and is renamed only after it matches. The new exe
+  is on the same drive as the old one, so the swap is a rename. Progress is
+  shown; **Cancel download** aborts the request and deletes the partial file.
+  The phase becomes `ready`: **Restart to update** or **Discard download**.
+- **Restart.** Main hashes the file once more, writes the helper script
+  `updates\apply-update.ps1` (a constant text) and starts Windows PowerShell
+  5.1 by its full `System32` path, detached and hidden, then quits. The
+  command line is a constant too: `-Command` runs
+  `[scriptblock]::Create([IO.File]::ReadAllText($env:QUQA_UPDATE_SCRIPT))`.
+  Every value (exe path, download, `previous.exe`, SHA-256, log, the app's
+  and the stub's process ids) travels in `QUQA_UPDATE_*` environment
+  variables, so no path is ever quoted into a command line or script, and
+  spaces, Georgian letters, apostrophes and brackets need no escaping. The
+  script uses literal .NET file calls (`[IO.File]::Move`, `Get-FileHash
+  -LiteralPath`), never wildcard paths, `Invoke-Expression` or `cmd`.
+  Electron, Node, portable-stub and test variables are not handed on.
+- **The helper** waits (up to 90 s each) for the app and the stub to exit,
+  checks the SHA-256 again, deletes the old `previous.exe`, moves the exe to
+  `updates\previous.exe`, moves the new exe to the exe's exact path and name,
+  checks the SHA-256 of the file now in place and starts it. Each move is
+  retried for 30 s (antivirus scans and the stub's clean-up hold files
+  briefly). If any step fails, the old exe is moved back and started; if
+  the new exe does not start, it is moved away and the old one restored.
+  It logs each step, without secrets, to `updates\update.log`.
+- **Clean-up.** At start the app deletes everything in `updates\` except
+  `previous.exe` and a log under 256 KiB. `previous.exe` stays for a manual
+  roll back (run it, or put it back by hand); there is no roll-back button.
+- **Tests.** Unit tests for path checks, the download and checksum flow
+  (mismatch, missing line, cancel, a file changed after the check, read-only
+  folder) and the launch (constant arguments; values with spaces, Georgian
+  letters and apostrophes passed byte for byte). On `windows-latest`,
+  `test/windows/portable-swap.test.ts` runs the real helper in such a
+  folder against a running exe (swap, checksum refusal, roll back), and the
+  Windows build job repeats it with the freshly built portable exe.
+
+### Consequences
+
+- The portable build now runs, after a checksum check, an unsigned exe it
+  downloaded, with the same trust as the installer path (the checksum comes
+  from the same release).
+- A PowerShell window never shows, but PowerShell must be present and not
+  blocked by policy (it is on every Windows 10 and 11; `-ExecutionPolicy
+  Bypass` covers the default policy; a Group Policy that forbids PowerShell
+  makes the update fail safely, keeping the old exe).
+- The first run of the new exe is again an unsigned exe from a new path for
+  SmartScreen, but it carries no mark of the web (main downloaded it), so
+  Windows does not prompt.

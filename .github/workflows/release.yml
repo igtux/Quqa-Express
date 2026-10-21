@@ -64,6 +64,16 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - run: node scripts/checksums.mjs
+      # The portable self-update helper for real (docs/adr/0006 addendum): it
+      # waits for a running exe, swaps in a new one under the same name, keeps
+      # updates/previous.exe, and rolls back; here also with the built exe.
+      - name: Portable self-update swap test
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          export QUQA_TEST_PORTABLE_EXE="release/$version/quqa-express-$version-portable.exe"
+          test -f "$QUQA_TEST_PORTABLE_EXE"
+          pnpm exec vitest run test/windows
 
       - name: Publish the release
         shell: bash

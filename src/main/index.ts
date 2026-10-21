@@ -5,7 +5,7 @@
  * frame. The renderer's files are served from app://quqa by our own protocol
  * handler (no file:// access).
  */
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { release as osRelease } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -56,7 +56,8 @@ import {
   isAppUrl,
   resolveAppPath,
 } from './urls.js';
-import { startInstaller, Updater } from './updater.js';
+import { portableTarget, startSwapHelper, swapLaunch } from './portable-update.js';
+import { startInstaller, Updater, type UpdaterDeps } from './updater.js';
 import { VaultBroker } from './vault-broker.js';
 import { MIN_SIZE, placeWindow, readWindowState, writeWindowState } from './window-state.js';
 
@@ -92,6 +93,23 @@ function adoptEarlyProfile() {
     // The user can still create a new vault.
   }
 }
+
+/**
+ * The portable exe this copy runs from, checked (src/main/portable-update.ts),
+ * or why it cannot replace itself. The long, final path keeps the exact file
+ * name the user's shortcuts point to.
+ */
+function portableSetup(): UpdaterDeps['portable'] {
+  const file = process.env['PORTABLE_EXECUTABLE_FILE'];
+  if (!portableDir || !file) return undefined;
+  try {
+    const checked = portableTarget(realpathSync.native(file), realpathSync.native(portableDir));
+    return checked.ok ? { target: checked.value } : { reason: checked.reason };
+  } catch {
+    return { reason: 'quqa-express could not find its own portable exe.' };
+  }
+}
+const portableBuild = process.platform === 'win32' && app.isPackaged && Boolean(portableDir);
 
 /** Windows 11 22H2 and later draw acrylic behind a transparent window background. */
 const materialSupported =
@@ -134,8 +152,14 @@ function start() {
   const updater = new Updater({
     settings,
     current: __APP_VERSION__,
-    // The NSIS install updates itself; the portable exe and other builds open the page.
-    method: process.platform === 'win32' && app.isPackaged && !portableDir ? 'installer' : 'page',
+    // The NSIS install runs the new installer; the portable exe swaps itself
+    // for the new one (ADR 0006 addendum); other builds open the page.
+    method: portableBuild
+      ? 'portable'
+      : process.platform === 'win32' && app.isPackaged
+        ? 'installer'
+        : 'page',
+    ...(portableBuild ? { portable: portableSetup() ?? { reason: 'Not a portable exe.' } } : {}),
     openExternal: (url) => {
       const safe = externalUrl(url);
       if (safe) void shell.openExternal(safe).catch(() => undefined);
@@ -143,6 +167,22 @@ function start() {
     runInstaller: (path) => {
       startInstaller(path);
       setTimeout(() => app.quit(), 500);
+    },
+    runPortableSwap: async (ready, target) => {
+      const launch = swapLaunch(
+        {
+          target,
+          download: ready.path,
+          sha256: ready.sha256,
+          appPid: process.pid,
+          // The portable stub that unpacked us waits on this process and keeps the exe open.
+          stubPid: process.ppid,
+        },
+        process.env,
+      );
+      const helper = await startSwapHelper(launch, target.updates);
+      helper.unref();
+      setTimeout(() => app.quit(), 300);
     },
     // Tests never reach GitHub; they may hand in a releases list instead.
     offline: testHooks,
