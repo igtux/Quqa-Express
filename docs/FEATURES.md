@@ -262,7 +262,7 @@ Short names used below:
 | Lost master password: "Forgot password? Start over" moves the vault to `vault-backups/<time>/` after typing DELETE | — | v1 | **Built (0.1.0-beta.5, ADR 0006).** |
 | App theme: Liquid glass (default; Windows 11 acrylic) or Classic | — | v1 | **Built (0.1.0-beta.5, ADR 0006).** |
 | Window size, position and maximized state remembered; one instance (a second start focuses the window) | — | v1 | **Built (Phase 5)**; single instance since Phase 1. |
-| Update check: badge, release notes, Update now (installer verified against SHA256SUMS.txt) / Later / Skip | — | v1 | **Built (0.1.0-beta.5, ADR 0006):** on by default, opt-out in About. **0.1.0-beta.6:** the portable exe updates itself (verified download, swap on restart, same file name, `updates\previous.exe` kept; download page if its folder is read-only); downloads can be cancelled. |
+| Update check: badge, release notes, Update now (installer verified against SHA256SUMS.txt) / Later / Skip | — | v1 | **Built (0.1.0-beta.5, ADR 0006):** on by default, opt-out in About. **0.1.0-beta.7:** the portable exe updates itself (verified download, swap on restart, same file name, `updates\previous.exe` kept; download page if its folder is read-only); downloads can be cancelled. |
 | Build provenance attestations, SBOM, code signing | — | later | Left out to keep releases simple. |
 
 ## v1 at a glance

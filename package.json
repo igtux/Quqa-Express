@@ -1,7 +1,7 @@
 {
   "name": "quqa-express",
   "productName": "quqa-express",
-  "version": "0.1.0-beta.6",
+  "version": "0.1.0-beta.7",
   "description": "Offline, single-user SSH terminal for the desktop.",
   "license": "Apache-2.0",
   "author": "AURA and the quqa-express contributors",

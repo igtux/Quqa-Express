@@ -4,7 +4,7 @@
  * in a folder whose name has spaces, Georgian letters, an apostrophe and
  * brackets, against a running "old" exe that holds its file open.
  *
- * Stand-ins: copies of ping.exe (old, kept running) and hostname.exe (new,
+ * Stand-ins: copies of ping.exe or node.exe (old, node kept running) and hostname.exe (new,
  * exits at once). With QUQA_TEST_PORTABLE_EXE (CI sets it after building)
  * the built portable exe is swapped in as the new version too.
  */
@@ -74,10 +74,13 @@ describe.skipIf(!windows)('portable swap helper on Windows', () => {
   it('waits for the running exe, swaps it under the same name and starts the new one', async () => {
     copyFileSync(join(system32, 'HOSTNAME.EXE'), download);
     writeFileSync(target.previous, 'an older previous.exe');
+    // The "app": the old exe itself (a copy of node.exe; a renamed ping.exe
+    // loses its language resources and exits at once), running for 3 s, so
+    // its file is in use.
+    copyFileSync(process.execPath, target.exe);
     const oldHash = await sha256File(target.exe);
     const newHash = await sha256File(download);
-    // The "app": the old exe itself, running for a few seconds, so its file is in use.
-    const app = spawn(target.exe, ['-n', '4', '127.0.0.1'], { stdio: 'ignore' });
+    const app = spawn(target.exe, ['-e', 'setTimeout(() => {}, 3000)'], { stdio: 'ignore' });
     running.push(app);
     // The "stub": another process the helper must wait for.
     const stub = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 1500)'], { stdio: 'ignore' });
@@ -87,7 +90,7 @@ describe.skipIf(!windows)('portable swap helper on Windows', () => {
     const code = await runHelper(newHash, app.pid as number, stub.pid as number, false);
 
     expect(code, log()).toBe(0);
-    // ping -n 4 runs about 3 s: the helper waited for it before moving its file.
+    // The helper waited for the running exe before moving its file.
     expect(Date.now() - started).toBeGreaterThan(2500);
     expect(await sha256File(target.exe)).toBe(newHash);
     expect(await sha256File(target.previous)).toBe(oldHash);

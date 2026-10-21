@@ -56,7 +56,7 @@ password.
   Only then is it started, detached, and the app quits. The vault is outside
   the install folder, so it stays. The portable exe, and any build that
   cannot update itself, opens the release page instead (superseded for the
-  portable exe in 0.1.0-beta.6: see the addendum below). electron-updater
+  portable exe in 0.1.0-beta.7: see the addendum below). electron-updater
   was not used: it adds a runtime dependency and wants `latest.yml`
   metadata, and a small downloader with a checksum check is about 150 lines
   of our own code.
@@ -143,7 +143,7 @@ password.
 - The BPG Courier GPL notice must ship with every build (it does, via
   `extraResources`).
 
-## Addendum (0.1.0-beta.6): portable self-update
+## Addendum (0.1.0-beta.7): portable self-update
 
 ### Context
 

@@ -165,8 +165,10 @@ export async function cleanUpdates(updates: string): Promise<void> {
  * The helper. Windows PowerShell 5.1 (on every Windows 10 and 11), ASCII only,
  * literal .NET file calls (no wildcard expansion of paths). It reads all its
  * values from the environment and clears them before it starts the app.
- * Exit codes: 0 updated, 2 checksum, 3 old previous.exe, 4 moving the old exe,
- * 5 placing the new exe, 6 the new exe did not start (rolled back).
+ * It returns (SWAP_COMMAND exits with) 0 updated, 2 checksum, 3 old
+ * previous.exe, 4 moving the old exe, 5 placing the new exe, 6 the new exe did
+ * not start (rolled back). Not `exit` inside the script: Windows PowerShell 5.1
+ * does not pass that out of a script block run by -Command.
  */
 export const SWAP_SCRIPT = [
   '# quqa-express portable self-update helper (docs/adr/0006). Written by the app;',
@@ -230,12 +232,12 @@ export const SWAP_SCRIPT = [
   "  Write-Log 'the downloaded exe does not match SHA256SUMS.txt; nothing was changed'",
   '  try { [IO.File]::Delete($new) } catch { }',
   '  [void](Start-App)',
-  '  exit 2',
+  '  return 2',
   '}',
   'if ([IO.File]::Exists($previous)) {',
-  "  if (-not (Invoke-Retry { [IO.File]::Delete($previous) } 'removing the older previous.exe')) { [void](Start-App); exit 3 }",
+  "  if (-not (Invoke-Retry { [IO.File]::Delete($previous) } 'removing the older previous.exe')) { [void](Start-App); return 3 }",
   '}',
-  "if (-not (Invoke-Retry { [IO.File]::Move($target, $previous) } 'moving the old exe aside')) { [void](Start-App); exit 4 }",
+  "if (-not (Invoke-Retry { [IO.File]::Move($target, $previous) } 'moving the old exe aside')) { [void](Start-App); return 4 }",
   "$placed = Invoke-Retry { [IO.File]::Move($new, $target) } 'putting the new exe in place'",
   'if ($placed -and -not (Test-Hash $target)) {',
   "  Write-Log 'the exe in place does not match SHA256SUMS.txt'",
@@ -245,7 +247,7 @@ export const SWAP_SCRIPT = [
   'if (-not $placed) {',
   "  [void](Invoke-Retry { [IO.File]::Move($previous, $target) } 'restoring the old exe')",
   '  [void](Start-App)',
-  '  exit 5',
+  '  return 5',
   '}',
   "Write-Log 'updated; starting the new version'",
   'if (-not (Start-App)) {',
@@ -253,9 +255,9 @@ export const SWAP_SCRIPT = [
   "  [void](Invoke-Retry { [IO.File]::Move($previous, $target) } 'restoring the old exe')",
   "  Write-Log 'rolled back to the old exe'",
   '  [void](Start-App)',
-  '  exit 6',
+  '  return 6',
   '}',
-  'exit 0',
+  'return 0',
   '',
 ].join('\r\n');
 
@@ -264,7 +266,7 @@ export const SWAP_SCRIPT = [
  * QUQA_UPDATE_SCRIPT and runs it, so no path ever appears in an argument.
  */
 export const SWAP_COMMAND =
-  '& ([scriptblock]::Create([IO.File]::ReadAllText($env:QUQA_UPDATE_SCRIPT)))';
+  '$code = @(& ([scriptblock]::Create([IO.File]::ReadAllText($env:QUQA_UPDATE_SCRIPT)))); exit [int]$code[-1]';
 
 export interface SwapPlan {
   target: PortableTarget;

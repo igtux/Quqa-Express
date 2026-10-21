@@ -4,7 +4,11 @@ All notable changes to quqa-express. Each release's section is also the
 start of its GitHub release notes and of what the in-app update panel shows
 (`scripts/changelog.mjs`, `.github/workflows/release.yml`).
 
-## [0.1.0-beta.6] - 2026-10-21
+## [0.1.0-beta.7] - 2026-10-21
+
+The 0.1.0-beta.6 tag was never published: its Windows test of the update
+helper found that Windows PowerShell 5.1 lost the helper's result codes.
+This release has everything planned for beta.6.
 
 ### Added
 
