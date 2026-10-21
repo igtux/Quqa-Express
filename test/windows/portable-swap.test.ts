@@ -26,6 +26,7 @@ import {
   sha256File,
   startSwapHelper,
   swapLaunch,
+  writeSwapScript,
   type PortableTarget,
 } from '../../src/main/portable-update.js';
 
@@ -111,6 +112,48 @@ describe.skipIf(!windows)('portable swap helper on Windows', () => {
     expect(await sha256File(target.exe)).toBe(newHash);
     expect(await sha256File(target.previous)).toBe(oldHash);
     expect(existsSync(download)).toBe(false);
+  });
+
+  it('diagnostic: the same command with its output captured', async () => {
+    copyFileSync(join(system32, 'HOSTNAME.EXE'), download);
+    const launch = swapLaunch(
+      {
+        target,
+        download,
+        sha256: '0'.repeat(64),
+        appPid: process.pid + 1_000_000,
+        stubPid: null,
+        noStart: true,
+      },
+      process.env,
+    );
+    await writeSwapScript(launch);
+    const run = (args: string[], detached: boolean) =>
+      new Promise<string>((resolve) => {
+        const child = spawn(launch.command, args, {
+          env: launch.env,
+          cwd: target.updates,
+          detached,
+          windowsHide: true,
+        });
+        let out = '';
+        child.stdout?.on('data', (d: Buffer) => (out += d.toString()));
+        child.stderr?.on('data', (d: Buffer) => (out += d.toString()));
+        child.on('error', (e) => resolve(`spawn error ${e.message}`));
+        child.on('exit', (code) => resolve(`code=${code} out=${out.slice(0, 600)}`));
+      });
+    const piped = await run(launch.args, false);
+    const pipedDetached = await run(launch.args, true);
+    const simple = await run(['-NoProfile', '-Command', 'exit 7'], false);
+    const echo = await run(
+      [
+        '-NoProfile',
+        '-Command',
+        'Write-Output $env:QUQA_UPDATE_SCRIPT; Write-Output $PSVersionTable.PSVersion',
+      ],
+      false,
+    );
+    expect({ piped, pipedDetached, simple, echo, log: log() }).toEqual({});
   });
 
   it('changes nothing when the download does not match the checksum', async () => {
