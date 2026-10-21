@@ -1,68 +1,215 @@
 /**
- * Quick connect: host, port, user and how to log in — a key from the vault
- * (by id) or a password, which the engine asks for when it needs it (or takes
- * from the vault if it was saved). The form never holds a secret.
+ * Quick Connect (Ctrl+Shift+O): a picker over every saved host with
+ * type-to-filter, plus ad-hoc `user@host:port` connections that may be saved
+ * as a host. The form never holds a secret: a password login asks after the
+ * host key is checked (or uses the saved password).
+ *
+ * Modelled on Jarvis NG's Quick Connect (apps/web/src/machines/QuickConnect.tsx), same owner.
  */
-import { useState, type FormEvent } from 'react';
-import type { Auth, KeyInfo } from '../../../shared/ipc.js';
-import type { Target } from '../terminal/connection.js';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import type { Auth, HostInfo, KeyInfo } from '../../../shared/ipc.js';
+import { call, messageOf } from '../api.js';
+import { EMPTY_HOST, validateHost } from '../hosts/HostForm.js';
+import { destination, filterHosts, splitDestination } from '../hosts/hostModel.js';
+import { useModalDialog } from './useModalDialog.js';
 
-export interface QuickConnectProps {
-  initial: Partial<Target>;
+export interface AdhocTarget {
+  host: string;
+  port: number;
+  username: string;
+  auth: Auth;
+}
+
+export function QuickConnect({
+  hosts,
+  keys,
+  onOpenHost,
+  onAdhoc,
+  onSavedHost,
+  onClose,
+}: {
+  hosts: HostInfo[];
   keys: KeyInfo[];
-  onConnect(target: Target): void;
-  onManageKeys(): void;
-}
+  onOpenHost(hostId: string): void;
+  onAdhoc(target: AdhocTarget): void;
+  onSavedHost(host: HostInfo): void;
+  onClose(): void;
+}) {
+  const ref = useModalDialog(onClose);
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState(0);
+  const [adhoc, setAdhoc] = useState<{ host: string; username: string; port: number } | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
-/** `user@host:port` in the host field fills the other fields too. */
-export function splitDestination(value: string): Partial<Target> {
-  const match = /^(?:([^@\s]+)@)?(\[[0-9A-Fa-f:.]+\]|[^:\s]+)(?::(\d{1,5}))?$/.exec(value.trim());
-  if (!match) return { host: value.trim() };
-  const [, username, host, port] = match;
-  return {
-    host: host ?? '',
-    ...(username !== undefined && { username }),
-    ...(port !== undefined && { port: Number(port) }),
-  };
-}
+  const matches = useMemo(() => filterHosts(hosts, query).slice(0, 50), [hosts, query]);
+  const parsed = splitDestination(query);
+  const offerAdhoc = Boolean(parsed.host) && query.trim().length > 0;
+  const count = matches.length + (offerAdhoc ? 1 : 0);
 
-export function QuickConnect({ initial, keys, onConnect, onManageKeys }: QuickConnectProps) {
-  const [host, setHost] = useState(initial.host ?? '');
-  const [port, setPort] = useState(String(initial.port ?? 22));
-  const [username, setUsername] = useState(initial.username ?? '');
-  const [method, setMethod] = useState<Auth['kind']>(initial.auth?.kind ?? 'password');
-  const initialKey = initial.auth?.kind === 'key' ? initial.auth.keyId : '';
-  const [keyId, setKeyId] = useState(initialKey);
-  const [problem, setProblem] = useState<string | null>(null);
-  const chosenKey = keys.find((k) => k.id === keyId) ?? keys[0];
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>('.qc-item.selected')
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const destination = splitDestination(host);
-    const target = {
-      host: destination.host ?? '',
-      port: destination.port ?? Number(port),
-      username: (destination.username ?? username).trim(),
-    };
-    if (!target.host) return setProblem('Enter a host name or address');
-    if (!Number.isInteger(target.port) || target.port < 1 || target.port > 65535) {
-      return setProblem('The port must be between 1 and 65535');
+  const choose = (index: number) => {
+    const host = matches[index];
+    if (host) {
+      onOpenHost(host.id);
+      onClose();
+    } else if (offerAdhoc && parsed.host) {
+      setAdhoc({ host: parsed.host, username: parsed.username ?? '', port: parsed.port ?? 22 });
     }
-    if (!target.username) return setProblem('Enter a user name');
-    let auth: Auth;
-    if (method === 'key') {
-      if (!chosenKey) return setProblem('Generate or import a key first');
-      auth = { kind: 'key', keyId: chosenKey.id };
-    } else {
-      auth = { kind: 'password' };
-    }
-    setProblem(null);
-    onConnect({ ...target, auth });
   };
 
   return (
-    <form className="connect-card" onSubmit={submit} aria-label="Quick connect" noValidate>
-      <div className="connect-card-body">
+    <dialog ref={ref} className="app-dialog quick-connect" aria-label="Quick Connect">
+      {adhoc ? (
+        <AdhocForm
+          initial={adhoc}
+          keys={keys}
+          onBack={() => setAdhoc(null)}
+          onConnect={(target, save) => {
+            if (!save) {
+              onAdhoc(target);
+              onClose();
+              return Promise.resolve(null);
+            }
+            return call('hosts.save', {
+              host: {
+                ...EMPTY_HOST,
+                name: target.host,
+                address: target.host,
+                port: target.port,
+                username: target.username,
+                auth: target.auth,
+              },
+            }).then(
+              (host) => {
+                onSavedHost(host);
+                onOpenHost(host.id);
+                onClose();
+                return null;
+              },
+              (error: unknown) => messageOf(error),
+            );
+          }}
+        />
+      ) : (
+        <div className="qc-picker">
+          <input
+            autoFocus
+            className="qc-input"
+            value={query}
+            placeholder="Host name, address, tag:… or user@host:port"
+            aria-label="Find a host or enter user@host:port"
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSelected(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setSelected((i) => Math.min(count - 1, i + 1));
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setSelected((i) => Math.max(0, i - 1));
+              } else if (event.key === 'Enter') {
+                event.preventDefault();
+                choose(selected);
+              }
+            }}
+          />
+          <div className="qc-list" ref={listRef} role="listbox" aria-label="Hosts">
+            {matches.map((host, index) => (
+              <div
+                key={host.id}
+                role="option"
+                aria-selected={index === selected}
+                className={`qc-item${index === selected ? ' selected' : ''}`}
+                onMouseMove={() => setSelected(index)}
+                onClick={() => choose(index)}
+              >
+                <span
+                  className="qc-dot"
+                  style={host.color ? { background: host.color } : undefined}
+                />
+                <span className="qc-name">{host.name}</span>
+                <span className="qc-sub">{destination(host)}</span>
+                {host.group && <span className="item-badge">{host.group}</span>}
+              </div>
+            ))}
+            {offerAdhoc && (
+              <div
+                role="option"
+                aria-selected={selected === matches.length}
+                className={`qc-item adhoc${selected === matches.length ? ' selected' : ''}`}
+                onMouseMove={() => setSelected(matches.length)}
+                onClick={() => choose(matches.length)}
+              >
+                <span className="qc-name">Connect to {query.trim()}</span>
+                <span className="qc-sub">ad hoc; the host key is checked first</span>
+              </div>
+            )}
+            {count === 0 && (
+              <div className="qc-empty">
+                {hosts.length === 0
+                  ? 'No saved hosts yet. Type user@host:port to connect.'
+                  : 'No matching host'}
+              </div>
+            )}
+          </div>
+          <div className="qc-hint">↑↓ to move · Enter to connect · Esc to close</div>
+        </div>
+      )}
+    </dialog>
+  );
+}
+
+function AdhocForm({
+  initial,
+  keys,
+  onBack,
+  onConnect,
+}: {
+  initial: { host: string; username: string; port: number };
+  keys: KeyInfo[];
+  onBack(): void;
+  /** Resolves with a problem to show, or null when done. */
+  onConnect(target: AdhocTarget, save: boolean): Promise<string | null>;
+}) {
+  const [host, setHost] = useState(initial.host);
+  const [port, setPort] = useState(String(initial.port));
+  const [username, setUsername] = useState(initial.username);
+  const [method, setMethod] = useState<Auth['kind']>('password');
+  const [keyId, setKeyId] = useState(keys[0]?.id ?? '');
+  const [save, setSave] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (method === 'key' && !keys.some((k) => k.id === keyId)) {
+      return setProblem('Generate or import a key first');
+    }
+    const auth: Auth = method === 'key' ? { kind: 'key', keyId } : { kind: 'password' };
+    const target = { host: host.trim(), port: Number(port), username: username.trim(), auth };
+    const invalid = validateHost({
+      ...EMPTY_HOST,
+      address: target.host,
+      port: target.port,
+      username: target.username,
+    });
+    if (invalid) return setProblem(invalid);
+    setProblem(null);
+    void onConnect(target, save).then(setProblem);
+  };
+
+  return (
+    <form className="app-dialog-form" onSubmit={submit} aria-label="Quick connect" noValidate>
+      <h3 className="app-dialog-title">Connect to a new host</h3>
+      <div className="app-dialog-body">
         <div className="system-form-row">
           <div className="system-form-group">
             <label htmlFor="qc-host">Host</label>
@@ -71,8 +218,6 @@ export function QuickConnect({ initial, keys, onConnect, onManageKeys }: QuickCo
               className="system-input"
               value={host}
               onChange={(e) => setHost(e.target.value)}
-              placeholder="server.example.com or user@host:port"
-              autoFocus
               spellCheck={false}
               autoComplete="off"
             />
@@ -97,9 +242,9 @@ export function QuickConnect({ initial, keys, onConnect, onManageKeys }: QuickCo
             onChange={(e) => setUsername(e.target.value)}
             spellCheck={false}
             autoComplete="off"
+            autoFocus
           />
         </div>
-
         <div className="segmented" role="group" aria-label="Authentication">
           <button
             type="button"
@@ -112,25 +257,13 @@ export function QuickConnect({ initial, keys, onConnect, onManageKeys }: QuickCo
             Key from the vault
           </button>
         </div>
-
-        {method === 'password' ? (
-          <p className="system-hint">
-            You are asked for the password after the host key is checked (or the saved one is used).
-          </p>
-        ) : keys.length === 0 ? (
-          <p className="system-hint">
-            The vault has no keys yet.{' '}
-            <button type="button" className="link-btn" onClick={onManageKeys}>
-              Generate or import one
-            </button>
-          </p>
-        ) : (
+        {method === 'key' && keys.length > 0 && (
           <div className="system-form-group">
             <label htmlFor="qc-key">Key</label>
             <select
               id="qc-key"
               className="system-input"
-              value={chosenKey?.id ?? ''}
+              value={keyId}
               onChange={(e) => setKeyId(e.target.value)}
             >
               {keys.map((key) => (
@@ -141,17 +274,28 @@ export function QuickConnect({ initial, keys, onConnect, onManageKeys }: QuickCo
             </select>
           </div>
         )}
-
+        {method === 'password' && (
+          <p className="system-hint">
+            You are asked for the password after the host key is checked (or the saved one is used).
+          </p>
+        )}
+        <label className="system-check">
+          <input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} />
+          <span>Save as a host</span>
+        </label>
         {problem && (
           <p className="system-error" role="alert">
             {problem}
           </p>
         )}
-        <div style={{ marginTop: 16 }}>
-          <button type="submit" className="system-btn primary">
-            Connect
-          </button>
-        </div>
+      </div>
+      <div className="app-dialog-actions">
+        <button type="button" className="system-btn ghost inline" onClick={onBack}>
+          Back
+        </button>
+        <button type="submit" className="system-btn primary inline">
+          Connect
+        </button>
       </div>
     </form>
   );

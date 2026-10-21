@@ -11,8 +11,11 @@ import {
   MAX_INPUT_LENGTH,
   MAX_PRIVATE_KEY_LENGTH,
   PromptAnswer,
+  NotifyMessage,
   ResizeMessage,
   SessionMessage,
+  TmuxMessage,
+  UiState,
 } from './ipc.js';
 
 const connect = {
@@ -238,5 +241,117 @@ describe('EngineCommand', () => {
     expect(
       Value.Check(EngineCommand, { type: 'connect', sessionId: 's1', request: { host: 'x' } }),
     ).toBe(false);
+  });
+});
+
+describe('Phase 3 messages', () => {
+  const NAME = `quqa-${'0123456789abcdef'.repeat(2)}`;
+  const hostConnect = (action: unknown) => ({
+    hostId: 'h_0123456789abcdef',
+    action,
+    cols: 80,
+    rows: 24,
+  });
+
+  it('connects to a saved host by id only, with a tmux name of our own pattern', () => {
+    expect(Value.Check(ConnectRequest, hostConnect({ type: 'shell', tmux: NAME }))).toBe(true);
+    expect(Value.Check(ConnectRequest, hostConnect({ type: 'shell', tmux: null }))).toBe(true);
+    expect(Value.Check(ConnectRequest, hostConnect({ type: 'list' }))).toBe(true);
+    expect(Value.Check(ConnectRequest, hostConnect({ type: 'end', session: NAME }))).toBe(true);
+    for (const action of [
+      { type: 'shell', tmux: 'jarvis-0' },
+      { type: 'shell', tmux: `${NAME}; reboot` },
+      { type: 'shell', tmux: NAME, command: 'id' },
+      { type: 'end', session: '-t evil' },
+      { type: 'exec', command: 'id' },
+    ]) {
+      expect(Value.Check(ConnectRequest, hostConnect(action))).toBe(false);
+    }
+    expect(
+      Value.Check(ConnectRequest, { ...hostConnect({ type: 'list' }), host: 'x', password: 'x' }),
+    ).toBe(false);
+    expect(Value.Check(ConnectRequest, { ...hostConnect({ type: 'list' }), hostId: 'h_x' })).toBe(
+      false,
+    );
+  });
+
+  it('checks tmux list / end / history messages', () => {
+    expect(Value.Check(TmuxMessage, { sessionId: 's1', op: 'list' })).toBe(true);
+    expect(Value.Check(TmuxMessage, { sessionId: 's1', op: 'end', session: NAME })).toBe(true);
+    expect(
+      Value.Check(TmuxMessage, { sessionId: 's1', op: 'history', action: 'scroll', lines: -20 }),
+    ).toBe(true);
+    expect(Value.Check(TmuxMessage, { sessionId: 's1', op: 'end', session: 'x' })).toBe(false);
+    expect(
+      Value.Check(TmuxMessage, { sessionId: 's1', op: 'history', action: 'scroll', lines: 501 }),
+    ).toBe(false);
+    expect(
+      Value.Check(TmuxMessage, { sessionId: 's1', op: 'history', action: 'send-keys', lines: 0 }),
+    ).toBe(false);
+    expect(Value.Check(TmuxMessage, { sessionId: 's1', op: 'run', command: 'id' })).toBe(false);
+  });
+
+  it('checks notifications: short single lines and our tags', () => {
+    expect(Value.Check(NotifyMessage, { title: 'web needs you', body: 'web', tag: 't3' })).toBe(
+      true,
+    );
+    expect(Value.Check(NotifyMessage, { title: 'a\u001b]8;;x', body: '', tag: 't3' })).toBe(false);
+    expect(Value.Check(NotifyMessage, { title: 'x'.repeat(121), body: '', tag: 't3' })).toBe(false);
+    expect(Value.Check(NotifyMessage, { title: 'x', body: '', tag: 'file:///x' })).toBe(false);
+  });
+
+  it('keeps the UI state free of secrets and bounded', () => {
+    const ui = {
+      scheme: 'dracula',
+      font: 'system',
+      zoom: 0,
+      notifications: true,
+      sound: false,
+      restoreTabs: true,
+      groupDock: true,
+      favorites: [{ hostId: 'h_0123456789abcdef', session: NAME }],
+      aliases: [{ session: NAME, label: 'build' }],
+      forgotten: [],
+      layout: {
+        tabs: [{ split: 'h', panes: [{ hostId: 'h_0123456789abcdef', session: null }] }],
+        active: 0,
+      },
+    };
+    expect(Value.Check(UiState, ui)).toBe(true);
+    expect(Value.Check(UiState, { ...ui, password: 'x' })).toBe(false);
+    expect(Value.Check(UiState, { ...ui, zoom: 99 })).toBe(false);
+    expect(Value.Check(UiState, { ...ui, scheme: '../x' })).toBe(false);
+    expect(
+      Value.Check(UiState, {
+        ...ui,
+        layout: { tabs: [{ split: 'h', panes: [] }], active: 0 },
+      }),
+    ).toBe(false);
+  });
+
+  it('never lets the renderer name a file for the ssh config import', () => {
+    const check = (method: keyof typeof AppCalls, params: unknown) =>
+      Value.Check(AppCalls[method].params, params);
+    expect(check('sshConfig.preview', { chooseFile: false })).toBe(true);
+    expect(check('sshConfig.preview', { chooseFile: false, path: '/etc/passwd' })).toBe(false);
+    expect(
+      check('sshConfig.import', {
+        token: 'a'.repeat(32),
+        aliases: ['web'],
+        importKeys: true,
+        tmux: false,
+      }),
+    ).toBe(true);
+    expect(
+      check('sshConfig.import', {
+        token: 'a'.repeat(32),
+        aliases: ['web'],
+        importKeys: true,
+        tmux: false,
+        identityFile: '/etc/shadow',
+      }),
+    ).toBe(false);
+    expect(check('hosts.ping', { ids: [] })).toBe(false);
+    expect(check('hosts.delete', { id: 'h_0123456789abcdef' })).toBe(false);
   });
 });

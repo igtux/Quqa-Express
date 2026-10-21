@@ -33,6 +33,16 @@ const api: QuqaApi = {
   clipboardWrite: (text) => ipcRenderer.invoke(Channel.clipboardWrite, text),
   clipboardRead: () => ipcRenderer.invoke(Channel.clipboardRead),
   attention: () => ipcRenderer.send(Channel.attention),
+  tmux: (message) => ipcRenderer.send(Channel.tmux, message),
+  notify: (message) => ipcRenderer.send(Channel.notify, message),
+  onNotificationClick: (listener) => {
+    const handler = (_event: IpcRendererEvent, tag: string) => listener(tag);
+    ipcRenderer.on(Channel.notificationClick, handler);
+    return () => {
+      ipcRenderer.removeListener(Channel.notificationClick, handler);
+    };
+  },
+  toggleFullScreen: () => ipcRenderer.send(Channel.fullScreen, null),
   testHooks: process.argv.includes('--quqa-test-hooks'),
 };
 

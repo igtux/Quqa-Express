@@ -77,8 +77,8 @@ prompts and paste warnings, left open here, were finished in Phase 2.
   upgrade; tests for round trip, wrong password, tampering, moved items,
   versions and lock.
 - 2.2 done: generate, import (paste or file; OpenSSH/PEM/PPK via ssh2) with
-  saved or per-unlock passphrase, list, copy / export public key, delete.
-  Open: the "used by N hosts" count needs saved hosts (Phase 3).
+  saved or per-unlock passphrase, list, copy / export public key, delete;
+  "used by N hosts" since Phase 3.
 - 2.3 partly: password and keyboard-interactive prompts engine-side, opt-in
   saved passwords. Open: "Install my public key on this host" (needs SFTP,
   Phase 4).
@@ -127,6 +127,37 @@ prompts and paste warnings, left open here, were finished in Phase 2.
 ---
 
 ## Phase 3: Hosts manager, tabs, panes, favorites, dock, switcher
+
+**Status: done**, except where noted below. Design: ADR 0003.
+
+- 3.1 done: hosts in the vault with name, address, port, user, key or
+  password, type, group, tags, colour, notes, tmux switch, per-host scheme
+  and font, jump-host placeholder; add / edit / duplicate / delete (optionally
+  forgetting the pinned key); compact status line (total, online, offline,
+  avg latency), latency as TCP connect time cached 20 s, Ping all; search
+  with `tag:` / `group:`, group filter, collapsible groups; connect counter
+  and last used; keys show "used by N hosts". Open: file roots and the Files
+  button (Phase 4), Windows setup guide, re-check host key on address change.
+- 3.2 done: Ctrl+Shift+O picker, ad-hoc `user@host:port`, "Save as a host".
+- 3.3 done: parser with wildcard defaults, Include / Match reported, preview
+  with checkboxes, duplicates flagged, IdentityFile keys imported on consent
+  (deduplicated by fingerprint; passphrase-protected keys reported), ProxyJump
+  stored for Phase 4.
+- 3.4 done: tabs (drag, rename, close, Ctrl+Tab), split side by side or
+  stacked, pane headers in split view, + new terminal to the same host, F11,
+  layout restored at start (switchable).
+- 3.5 done: opt-in per host (default off), `quqa-<32 hex>` names, list / end /
+  re-attach, 20 per host, "sessions on host" dialog, notice when a restored
+  session had ended, history (copy-mode) scrolling with Live. Tested against
+  tmux in the test server.
+- 3.6 done: dock side panel (group, filter, states, card menu, hover
+  preview, Close all), favorites bar (sessions and hosts, Alt+Shift+1…8),
+  switcher. Open: pinned plain shells are not kept across restarts.
+- 3.7 partly: 20 schemes, 12 font stacks (not bundled), theme dialog,
+  zoom, search, bell and agent-finished attention with 30 s cooldown,
+  desktop notifications through main, per-terminal mute, shortcuts list (F1),
+  non-Latin shortcuts. Open: bundled fonts, sound packs (a synthesized chime
+  for now), notice island, OSC 52 "remember for this host".
 
 ### 3.1 Hosts manager
 - **AC:** add/edit/delete hosts (name, address, port, user, key or

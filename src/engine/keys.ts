@@ -108,6 +108,10 @@ export class KeyStore {
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  has(id: string): boolean {
+    return this.vault.get<StoredKey>('key', id) !== null;
+  }
+
   describe(id: string): KeyInfo {
     const stored = this.vault.get<StoredKey>('key', id);
     if (!stored) throw new CallError('not_found', 'That key is no longer in the vault');
@@ -179,5 +183,7 @@ function toInfo(id: string, stored: StoredKey): KeyInfo {
     createdAt: stored.createdAt,
     encrypted: stored.encrypted,
     passphraseSaved: stored.passphrase !== undefined,
+    // Filled in by the engine, which knows the saved hosts.
+    usedBy: 0,
   };
 }

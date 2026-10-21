@@ -43,7 +43,8 @@ Electron binary (postinstall).
 
 ## End-to-end tests
 
-`test/e2e` connects the real engine to an OpenSSH server. It runs when
+`test/e2e` connects the real engine to an OpenSSH server (with tmux, for the
+resumable-session tests). It runs when
 `QUQA_TEST_SSH_HOST` is set (the compose file sets it, and the other
 `QUQA_TEST_SSH_*` variables, for the `dev` service) and is skipped otherwise.
 The test server accepts the user `quqa` with the publicly known password
@@ -53,7 +54,10 @@ run time and install them over a password session.
 Engine and vault tests create their vaults in temporary folders with small
 Argon2id parameters; nothing touches your real app data.
 
-The UI test also uses the server when the variables are set. It starts the
+The UI test also uses the server when the variables are set: it adds a host,
+opens two tabs and a split, uses the switcher and the sessions dock, closes a
+tmux tab and re-attaches it, restarts the app to check the restored layout,
+and finally ends the tmux sessions it created on the server. It starts the
 app with `QUQA_TEST_HOOKS=1`, a throw-away profile (`QUQA_USER_DATA`) and
 `QUQA_TEST_NO_OS_KEYSTORE=1` (act as if there were no OS key store, so the
 vault needs a master password); main honours the last two only together with
@@ -90,7 +94,8 @@ src/engine/    SSH engine (ssh2) run as a utilityProcess; plain Node, unit-testa
 src/engine/vault/  encrypted vault (format and crypto: docs/adr/0002-vault.md)
 src/shared/    IPC contract: protocol.ts (no deps), ipc.ts (renderer ↔ main schemas, AppCalls),
                engine-protocol.ts (main ↔ engine), csp.ts
-src/renderer/  React UI, xterm.js terminal
+src/renderer/  React UI: hosts/ (hosts screen, forms, ssh config import),
+               terminal/ (xterm session, workspace, dock model, themes), components/
 test/e2e/      engine against a real SSH server
 test/ui/       Playwright smoke test of the Electron app
 docker/        dev image, compose stack, test SSH server

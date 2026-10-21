@@ -33,6 +33,14 @@ export const Channel = {
   clipboardRead: 'clipboard:read',
   /** send: flash the taskbar entry (terminal bell while unfocused) */
   attention: 'window:attention',
+  /** send: list / end / scroll tmux sessions over a live session's connection */
+  tmux: 'ssh:tmux',
+  /** send: show a desktop notification about a terminal */
+  notify: 'window:notify',
+  /** main → renderer: the user clicked a notification (its tag) */
+  notificationClick: 'window:notification-click',
+  /** send: toggle full screen */
+  fullScreen: 'window:full-screen',
 } as const;
 
 export const MAX_PASSWORD_LENGTH = 1024;
@@ -128,9 +136,43 @@ export type SessionEvent =
       /** The answer may be saved in the vault. */
       canRemember: boolean;
     }
-  | { type: 'ready'; sessionId: string }
+  | {
+      type: 'ready';
+      sessionId: string;
+      /** The tmux session the terminal runs in, or null for a plain shell. */
+      tmux: string | null;
+    }
+  | {
+      /** The host's quqa tmux sessions (after connecting, or on request). */
+      type: 'tmux-sessions';
+      sessionId: string;
+      /** tmux is installed on the host. */
+      available: boolean;
+      sessions: TmuxSessionInfo[];
+    }
+  | {
+      /** tmux copy-mode state after a history action. */
+      type: 'history';
+      sessionId: string;
+      inMode: boolean;
+      position: number;
+      size: number;
+    }
   | { type: 'data'; sessionId: string; data: Uint8Array }
   | { type: 'error'; sessionId: string; code: SshErrorCode; message: string }
   | { type: 'closed'; sessionId: string; exitCode: number | null };
 
 export type VaultState = 'absent' | 'locked' | 'unlocked';
+
+/** One tmux session on a host, as `tmux list-sessions` reports it. */
+export interface TmuxSessionInfo {
+  name: string;
+  /** Clients attached right now (another window, another computer). */
+  attached: number;
+  createdAt: string;
+  /** Seconds since the last activity. */
+  idleSeconds: number;
+  /** Folder and program of the active pane. */
+  path: string;
+  command: string;
+}

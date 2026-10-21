@@ -10,6 +10,7 @@
 import Type, { type Static, type TSchema } from 'typebox';
 import {
   AckMessage,
+  AppCalls,
   ConnectRequest,
   Host,
   HostKeyAnswer,
@@ -24,6 +25,7 @@ import {
   ResizeMessage,
   Secret,
   SessionId,
+  TmuxMessage,
   VaultMode,
   VaultSettings,
 } from './ipc.js';
@@ -104,6 +106,18 @@ export const EngineCalls = {
     params: obj({ requestId: Type.String({ pattern: '^c[0-9]{1,9}$' }) }),
     result: Empty,
   },
+  'hosts.list': AppCalls['hosts.list'],
+  'hosts.save': AppCalls['hosts.save'],
+  'hosts.delete': AppCalls['hosts.delete'],
+  'hosts.ping': AppCalls['hosts.ping'],
+  /** Parses an ssh config file chosen (or located) by main. */
+  'sshConfig.readPath': {
+    params: obj({ path: FilePath }),
+    result: AppCalls['sshConfig.preview'].result,
+  },
+  'sshConfig.import': AppCalls['sshConfig.import'],
+  'ui.get': AppCalls['ui.get'],
+  'ui.save': AppCalls['ui.save'],
 } as const satisfies Record<string, { params: TSchema; result: TSchema }>;
 
 export type EngineMethod = keyof typeof EngineCalls;
@@ -119,6 +133,7 @@ export const EngineCommand = Type.Union([
   obj({ type: Type.Literal('reconnect'), sessionId: SessionId }),
   obj({ type: Type.Literal('host-key-answer'), ...HostKeyAnswer.properties }),
   obj({ type: Type.Literal('prompt-answer'), ...PromptAnswer.properties }),
+  obj({ type: Type.Literal('tmux'), message: TmuxMessage }),
   obj({
     type: Type.Literal('call'),
     callId: Type.Integer({ minimum: 1 }),

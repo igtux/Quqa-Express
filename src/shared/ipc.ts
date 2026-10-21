@@ -25,12 +25,19 @@ export * from './protocol.js';
 export const HOST_PATTERN =
   '^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?|\\[?[0-9A-Fa-f:.]{2,45}\\]?)$';
 /** POSIX-ish user names, plus the `DOMAIN\\user` and `user@domain` forms Windows servers use. */
-const USER_PATTERN = '^[A-Za-z0-9._@\\\\][A-Za-z0-9._@\\\\-]{0,63}$';
+export const USER_PATTERN = '^[A-Za-z0-9._@\\\\][A-Za-z0-9._@\\\\-]{0,63}$';
 const SESSION_ID_PATTERN = '^s[0-9]{1,9}$';
 const REQUEST_ID_PATTERN = '^k[0-9]{1,9}$';
 const PROMPT_ID_PATTERN = '^p[0-9]{1,9}$';
 const CHANGE_ID_PATTERN = '^c[0-9]{1,9}$';
 export const KEY_ID_PATTERN = '^key_[0-9a-f]{16}$';
+export const HOST_ID_PATTERN = '^h_[0-9a-f]{16}$';
+/** The only tmux session names the app creates, attaches to or ends. */
+export const TMUX_NAME_PATTERN = '^quqa-[0-9a-f]{32}$';
+/** Tags a desktop notification with the terminal it is about. */
+const NOTIFY_TAG_PATTERN = '^t[0-9]{1,9}$';
+/** Colour scheme and font ids (themes.ts). */
+const THEME_ID_PATTERN = '^[a-z0-9-]{1,32}$';
 /** One line of printable text (labels end up in key comments and the UI). */
 const LABEL_PATTERN = '^[^\\u0000-\\u001f\\u007f]{1,64}$';
 
@@ -42,6 +49,14 @@ export const Cols = Type.Integer({ minimum: 2, maximum: 1000 });
 export const Rows = Type.Integer({ minimum: 1, maximum: 500 });
 export const Secret = Type.String({ minLength: 1, maxLength: MAX_PASSWORD_LENGTH });
 export const Label = Type.String({ pattern: LABEL_PATTERN });
+export const HostId = Type.String({ pattern: HOST_ID_PATTERN });
+export const TmuxName = Type.String({ pattern: TMUX_NAME_PATTERN });
+export const UserName = Type.String({ pattern: USER_PATTERN });
+/** A short single-line text that may be empty (group, alias). */
+const ShortText = (max: number) =>
+  Type.String({ maxLength: max, pattern: `^[^\\u0000-\\u001f\\u007f]{0,${max}}$` });
+/** Multi-line notes: no control characters but tab and newline. */
+const NOTES_PATTERN = '^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f]*$';
 
 /** Log in with a password: the engine uses the saved one or asks the user. */
 export const PasswordAuth = Type.Object(
@@ -58,17 +73,44 @@ export const KeyAuth = Type.Object(
 export const Auth = Type.Union([PasswordAuth, KeyAuth]);
 export type Auth = Static<typeof Auth>;
 
-export const ConnectRequest = Type.Object(
+/** An ad-hoc connection (Quick Connect): address, user and login method given here. */
+export const AdhocConnect = Type.Object(
   {
     host: Host,
     port: Port,
-    username: Type.String({ pattern: USER_PATTERN }),
+    username: UserName,
     auth: Auth,
     cols: Cols,
     rows: Rows,
   },
   { additionalProperties: false },
 );
+export type AdhocConnect = Static<typeof AdhocConnect>;
+
+/**
+ * What a connection to a saved host is for. `shell`: a terminal, inside the
+ * tmux session `tmux` when the host has resumable sessions on (and tmux is
+ * installed), else a plain shell. `list` / `end`: log in, list the host's
+ * quqa tmux sessions (after ending `session`), report them and close.
+ */
+export const HostAction = Type.Union([
+  Type.Object(
+    { type: Type.Literal('shell'), tmux: Type.Union([TmuxName, Type.Null()]) },
+    { additionalProperties: false },
+  ),
+  Type.Object({ type: Type.Literal('list') }, { additionalProperties: false }),
+  Type.Object({ type: Type.Literal('end'), session: TmuxName }, { additionalProperties: false }),
+]);
+export type HostAction = Static<typeof HostAction>;
+
+/** A connection to a saved host, by id: the engine takes address, user and login from it. */
+export const HostConnect = Type.Object(
+  { hostId: HostId, action: HostAction, cols: Cols, rows: Rows },
+  { additionalProperties: false },
+);
+export type HostConnect = Static<typeof HostConnect>;
+
+export const ConnectRequest = Type.Union([AdhocConnect, HostConnect]);
 export type ConnectRequest = Static<typeof ConnectRequest>;
 
 export const ConnectResult = Type.Object({ sessionId: SessionId }, { additionalProperties: false });
@@ -125,6 +167,37 @@ export type PromptAnswer = Static<typeof PromptAnswer>;
 
 export const ClipboardText = Type.String({ maxLength: MAX_CLIPBOARD_LENGTH });
 
+/** tmux on a live session's own connection: list sessions, end one, or drive history (copy-mode). */
+export const TmuxMessage = Type.Union([
+  Type.Object({ sessionId: SessionId, op: Type.Literal('list') }, { additionalProperties: false }),
+  Type.Object(
+    { sessionId: SessionId, op: Type.Literal('end'), session: TmuxName },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      sessionId: SessionId,
+      op: Type.Literal('history'),
+      action: Type.Union([Type.Literal('enter'), Type.Literal('exit'), Type.Literal('scroll')]),
+      /** Negative scrolls up. */
+      lines: Type.Integer({ minimum: -500, maximum: 500 }),
+    },
+    { additionalProperties: false },
+  ),
+]);
+export type TmuxMessage = Static<typeof TmuxMessage>;
+
+/** A desktop notification about a terminal; clicking it reports `tag` back. */
+export const NotifyMessage = Type.Object(
+  {
+    title: ShortText(120),
+    body: ShortText(200),
+    tag: Type.String({ pattern: NOTIFY_TAG_PATTERN }),
+  },
+  { additionalProperties: false },
+);
+export type NotifyMessage = Static<typeof NotifyMessage>;
+
 /* ----- Vault, keys and host keys (one `app:call` channel) ------------------ */
 
 export const VaultMode = Type.Union([
@@ -175,6 +248,8 @@ export const KeyInfo = Type.Object(
     encrypted: Type.Boolean(),
     /** That passphrase is saved in the vault (otherwise asked once per unlock). */
     passphraseSaved: Type.Boolean(),
+    /** Saved hosts that log in with this key. */
+    usedBy: Type.Integer({ minimum: 0 }),
   },
   { additionalProperties: false },
 );
@@ -208,6 +283,130 @@ export type ImportSummary = Static<typeof ImportSummary>;
 const Empty = Type.Object({}, { additionalProperties: false });
 const obj = <P extends Record<string, TSchema>>(properties: P) =>
   Type.Object(properties, { additionalProperties: false });
+
+/* ----- Saved hosts ---------------------------------------------------------- */
+
+export const TAG_PATTERN = '^[^\\s,\\u0000-\\u001f\\u007f]{1,32}$';
+export const MAX_HOSTS = 1000;
+export const MAX_TMUX_SESSIONS = 20;
+
+/** What the user edits; no secrets (a password login asks or uses the saved password). */
+export const HostInput = obj({
+  name: Label,
+  address: Host,
+  port: Port,
+  username: UserName,
+  auth: Auth,
+  os: Type.Union([Type.Literal('linux'), Type.Literal('windows')]),
+  group: ShortText(64),
+  tags: Type.Array(Type.String({ pattern: TAG_PATTERN }), { maxItems: 16 }),
+  notes: Type.String({ maxLength: 4000, pattern: NOTES_PATTERN }),
+  /** Card accent, `#rrggbb`, or empty. */
+  color: Type.String({ pattern: '^(#[0-9a-f]{6})?$' }),
+  /** Resumable sessions: run terminals inside tmux when the host has it. */
+  tmux: Type.Boolean(),
+  /** Phase 4: another saved host to jump through (stored, not used yet). */
+  jumpHostId: Type.Union([HostId, Type.Null()]),
+  /** Phase 4: `ProxyJump` as read from ~/.ssh/config, kept for later. */
+  proxyJump: ShortText(255),
+  /** Per-host terminal look; empty = the app default. */
+  scheme: Type.String({ pattern: '^([a-z0-9-]{1,32})?$' }),
+  font: Type.String({ pattern: '^([a-z0-9-]{1,32})?$' }),
+});
+export type HostInput = Static<typeof HostInput>;
+
+export const HostInfo = obj({
+  id: HostId,
+  ...HostInput.properties,
+  createdAt: Type.String({ maxLength: 40 }),
+  lastUsedAt: Type.Union([Type.String({ maxLength: 40 }), Type.Null()]),
+  connectCount: Type.Integer({ minimum: 0 }),
+});
+export type HostInfo = Static<typeof HostInfo>;
+
+export const LatencyResult = obj({
+  id: HostId,
+  /** TCP connect time to the SSH port; null when it failed. */
+  ms: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
+  error: Type.Union([Type.String({ maxLength: 200 }), Type.Null()]),
+});
+export type LatencyResult = Static<typeof LatencyResult>;
+
+/** One `Host` entry found in ~/.ssh/config, after wildcard defaults were applied. */
+export const SshConfigEntry = obj({
+  alias: Type.String({ maxLength: 255 }),
+  hostName: Type.String({ maxLength: 255 }),
+  user: Type.String({ maxLength: 64 }),
+  port: Port,
+  identityFile: Type.String({ maxLength: 4096 }),
+  proxyJump: Type.String({ maxLength: 255 }),
+  /** Why it cannot be imported as is (bad address or user); empty when it can. */
+  problem: Type.String({ maxLength: 200 }),
+  /** A saved host already has this address, port and user. */
+  duplicate: Type.Boolean(),
+});
+export type SshConfigEntry = Static<typeof SshConfigEntry>;
+
+export const SshConfigPreview = obj({
+  found: Type.Boolean(),
+  /** Hands the parsed file to `sshConfig.import` (the renderer never names files). */
+  token: Type.String({ pattern: '^[0-9a-f]{32}$' }),
+  entries: Type.Array(SshConfigEntry, { maxItems: MAX_HOSTS }),
+  /** What was not imported: Include, Match, unknown keywords (shown to the user). */
+  notes: Type.Array(Type.String({ maxLength: 300 }), { maxItems: 50 }),
+});
+export type SshConfigPreview = Static<typeof SshConfigPreview>;
+
+export const SshConfigImported = obj({
+  hosts: Type.Integer({ minimum: 0 }),
+  keys: Type.Integer({ minimum: 0 }),
+  /** One line per entry whose key could not be imported (the host uses a password then). */
+  problems: Type.Array(Type.String({ maxLength: 300 }), { maxItems: MAX_HOSTS }),
+});
+export type SshConfigImported = Static<typeof SshConfigImported>;
+
+/* ----- UI state (saved in the vault, no secrets) ---------------------------- */
+
+const ThemeId = Type.String({ pattern: THEME_ID_PATTERN });
+
+export const SavedPane = obj({
+  hostId: HostId,
+  /** The tmux session to re-attach; null: a fresh shell. */
+  session: Type.Union([TmuxName, Type.Null()]),
+});
+export type SavedPane = Static<typeof SavedPane>;
+
+export const UiState = obj({
+  scheme: ThemeId,
+  font: ThemeId,
+  zoom: Type.Integer({ minimum: -6, maximum: 10 }),
+  /** Desktop notifications when a background terminal rings or an agent finishes. */
+  notifications: Type.Boolean(),
+  /** A short chime with them. */
+  sound: Type.Boolean(),
+  /** Re-open the last tabs (tmux sessions re-attach) at start. */
+  restoreTabs: Type.Boolean(),
+  groupDock: Type.Boolean(),
+  /** Favorites bar: a session (tmux) or a host (session null). */
+  favorites: Type.Array(obj({ hostId: HostId, session: Type.Union([TmuxName, Type.Null()]) }), {
+    maxItems: 32,
+  }),
+  /** Session names chosen by the user. */
+  aliases: Type.Array(obj({ session: TmuxName, label: ShortText(60) }), { maxItems: 500 }),
+  /** tmux sessions hidden from the dock ("Forget"). */
+  forgotten: Type.Array(TmuxName, { maxItems: 500 }),
+  layout: obj({
+    tabs: Type.Array(
+      obj({
+        split: Type.Union([Type.Literal('none'), Type.Literal('h'), Type.Literal('v')]),
+        panes: Type.Array(SavedPane, { minItems: 1, maxItems: 2 }),
+      }),
+      { maxItems: 32 },
+    ),
+    active: Type.Integer({ minimum: -1, maximum: 31 }),
+  }),
+});
+export type UiState = Static<typeof UiState>;
 
 /**
  * Every renderer → main call: its parameters and its result. Main checks the
@@ -267,6 +466,30 @@ export const AppCalls = {
     result: ImportSummary,
   },
   'hostKeys.forget': { params: obj({ host: Host, port: Port }), result: Empty },
+  'hosts.list': { params: Empty, result: obj({ hosts: Type.Array(HostInfo) }) },
+  /** Creates a host (no `id`) or replaces the editable fields of one. */
+  'hosts.save': { params: obj({ id: Type.Optional(HostId), host: HostInput }), result: HostInfo },
+  /** `forgetHostKey`: also drop the pinned key, unless another host uses the address. */
+  'hosts.delete': { params: obj({ id: HostId, forgetHostKey: Type.Boolean() }), result: Empty },
+  /** TCP connect time to each host's SSH port (no login, nothing sent). */
+  'hosts.ping': {
+    params: obj({ ids: Type.Array(HostId, { minItems: 1, maxItems: 100 }) }),
+    result: obj({ results: Type.Array(LatencyResult) }),
+  },
+  /** Reads ~/.ssh/config (or a chosen file) and returns what could be imported. */
+  'sshConfig.preview': { params: obj({ chooseFile: Type.Boolean() }), result: SshConfigPreview },
+  /** Imports the chosen entries; `importKeys`: read their IdentityFile into the vault. */
+  'sshConfig.import': {
+    params: obj({
+      token: Type.String({ pattern: '^[0-9a-f]{32}$' }),
+      aliases: Type.Array(Type.String({ maxLength: 255 }), { minItems: 1, maxItems: MAX_HOSTS }),
+      importKeys: Type.Boolean(),
+      tmux: Type.Boolean(),
+    }),
+    result: SshConfigImported,
+  },
+  'ui.get': { params: Empty, result: UiState },
+  'ui.save': { params: UiState, result: Empty },
   /** Pin the key the engine saw in a `host-key-changed` event, dropping the old pins. */
   'hostKeys.replace': {
     params: obj({ requestId: Type.String({ pattern: CHANGE_ID_PATTERN }) }),
@@ -296,6 +519,13 @@ export interface QuqaApi {
   clipboardWrite(text: string): Promise<void>;
   clipboardRead(): Promise<string>;
   attention(): void;
+  /** List, end or scroll (history) tmux sessions over a live session's connection. */
+  tmux(message: TmuxMessage): void;
+  /** Shows a desktop notification (main skips it while the window has focus). */
+  notify(message: NotifyMessage): void;
+  /** Called with the tag of a notification the user clicked. */
+  onNotificationClick(listener: (tag: string) => void): () => void;
+  toggleFullScreen(): void;
   /** Set only when the app was started for the UI smoke test. */
   testHooks: boolean;
 }

@@ -215,3 +215,11 @@ The vault format and crypto choices are fixed in
 writes the vault file itself and main only wraps a random OS key with
 `safeStorage`; passwords and passphrases are asked engine-side through
 prompt events; the renderer is served from `app://quqa/`.
+
+## Addendum (2026-10-21, Phase 3)
+
+Saved hosts and the UI state are vault items; the renderer connects to a
+saved host by id; tmux is opt-in per host and driven only by fixed commands
+with `quqa-<32 hex>` names; the hosts screen measures latency with a TCP
+connect to each saved SSH port; desktop notifications are shown by main.
+See [ADR 0003](0003-hosts-and-sessions.md).

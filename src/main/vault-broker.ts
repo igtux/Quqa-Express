@@ -226,6 +226,35 @@ export class VaultBroker {
         }
         return engine.call('hostKeys.replace', params);
       }
+      case 'hosts.list':
+        return engine.call('hosts.list', {});
+      case 'hosts.save':
+        return engine.call('hosts.save', raw as CallParams<'hosts.save'>);
+      case 'hosts.delete':
+        return engine.call('hosts.delete', raw as CallParams<'hosts.delete'>);
+      case 'hosts.ping':
+        return engine.call('hosts.ping', raw as CallParams<'hosts.ping'>);
+      case 'sshConfig.preview': {
+        const { chooseFile } = raw as CallParams<'sshConfig.preview'>;
+        // %USERPROFILE%\.ssh\config on Windows, ~/.ssh/config elsewhere.
+        const standard = join(homedir(), '.ssh', 'config');
+        const path = chooseFile
+          ? await this.openFile('Import an ssh config file', standard)
+          : standard;
+        if (!path) {
+          return {
+            ok: true,
+            value: { found: false, token: '0'.repeat(32), entries: [], notes: [] },
+          };
+        }
+        return engine.call('sshConfig.readPath', { path });
+      }
+      case 'sshConfig.import':
+        return engine.call('sshConfig.import', raw as CallParams<'sshConfig.import'>);
+      case 'ui.get':
+        return engine.call('ui.get', {});
+      case 'ui.save':
+        return engine.call('ui.save', raw as CallParams<'ui.save'>);
     }
   }
 

@@ -13,11 +13,12 @@ import {
   clipboard,
   ipcMain,
   Menu,
+  Notification,
   protocol,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
-import type { Static, TSchema } from 'typebox';
+import Type, { type Static, type TSchema } from 'typebox';
 import Value from 'typebox/value';
 import { contentSecurityPolicy } from '../shared/csp.js';
 import {
@@ -29,9 +30,11 @@ import {
   HostKeyAnswer,
   InputMessage,
   MAX_CLIPBOARD_LENGTH,
+  NotifyMessage,
   PromptAnswer,
   ResizeMessage,
   SessionMessage,
+  TmuxMessage,
   type AppMethod,
   type SessionEvent,
 } from '../shared/ipc.js';
@@ -50,6 +53,8 @@ if (testUserData) app.setPath('userData', testUserData);
 
 // Chromium's renderer sandbox for every renderer, before the app is ready.
 app.enableSandbox();
+// Windows shows desktop notifications only for an app with this id (electron-builder.yml appId).
+if (process.platform === 'win32') app.setAppUserModelId('io.github.igtux.quqa-express');
 
 // app:// behaves like https for the page (secure context, same-origin rules).
 protocol.registerSchemesAsPrivileged([
@@ -176,6 +181,41 @@ function start() {
   });
   ipcMain.on(Channel.attention, (event) => {
     if (trusted(event) && window && !window.isFocused()) window.flashFrame(true);
+  });
+  on(Channel.tmux, TmuxMessage, (event, message) => {
+    if (owns(event, message.sessionId)) engine.send({ type: 'tmux', message });
+  });
+  on(Channel.fullScreen, Type.Null(), () => {
+    window?.setFullScreen(!window.isFullScreen());
+  });
+  /** Only while the window is in the background; a click brings the terminal to the front. */
+  const shown = new Set<Notification>();
+  on(Channel.notify, NotifyMessage, (_event, message) => {
+    if (!window || (window.isFocused() && window.isVisible()) || !Notification.isSupported()) {
+      return;
+    }
+    window.flashFrame(true);
+    const notification = new Notification({
+      title: message.title || 'Quqa Express',
+      body: message.body,
+      silent: true,
+    });
+    shown.add(notification);
+    notification.on('click', () => {
+      if (!window) return;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      window.webContents.send(Channel.notificationClick, message.tag);
+    });
+    notification.on('close', () => shown.delete(notification));
+    // Keep at most a few on screen.
+    if (shown.size > 5) {
+      const oldest = shown.values().next().value;
+      oldest?.close();
+      if (oldest) shown.delete(oldest);
+    }
+    notification.show();
   });
 
   ipcMain.handle(Channel.clipboardWrite, async (event, text: unknown) => {

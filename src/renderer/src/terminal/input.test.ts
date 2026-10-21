@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splitDestination } from '../components/QuickConnect.js';
+import { splitDestination } from '../hosts/hostModel.js';
 import { reconnectDelayMs, sliceInput } from './input.js';
 import { parseOsc52 } from './osc52.js';
 
@@ -61,6 +61,7 @@ describe('splitDestination', () => {
       port: 2222,
     });
     expect(splitDestination(' example.com ')).toEqual({ host: 'example.com' });
-    expect(splitDestination('me@[::1]:22')).toEqual({ host: '[::1]', username: 'me', port: 22 });
+    expect(splitDestination('me@[::1]:22')).toEqual({ host: '::1', username: 'me', port: 22 });
+    expect(splitDestination('two words')).toEqual({});
   });
 });

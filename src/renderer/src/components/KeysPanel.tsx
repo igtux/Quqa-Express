@@ -102,7 +102,10 @@ export function KeysPanel({ keys, onChange }: { keys: KeyInfo[]; onChange(): voi
                 <div className="item-mono" data-testid="key-fingerprint">
                   {key.fingerprint}
                 </div>
-                <div className="item-meta">Added {new Date(key.createdAt).toLocaleString()}</div>
+                <div className="item-meta">
+                  Added {new Date(key.createdAt).toLocaleString()}
+                  {key.usedBy > 0 && ` · used by ${key.usedBy} host${key.usedBy === 1 ? '' : 's'}`}
+                </div>
               </div>
               <div className="item-actions">
                 <button type="button" className="link-btn" onClick={() => copy(key)}>
@@ -142,7 +145,11 @@ export function KeysPanel({ keys, onChange }: { keys: KeyInfo[]; onChange(): voi
       {deleting && (
         <ConfirmDialog
           title={`Delete ${deleting.label}?`}
-          note="The private key is removed from the vault for good. Servers that only accept this key will refuse you; keep another way in."
+          note={`${
+            deleting.usedBy > 0
+              ? `${deleting.usedBy} saved host${deleting.usedBy === 1 ? '' : 's'} log in with this key and will stop working until you choose another login. `
+              : ''
+          }The private key is removed from the vault for good. Servers that only accept this key will refuse you; keep another way in.`}
           confirm="Delete key"
           onAnswer={(yes) => {
             const key = deleting;

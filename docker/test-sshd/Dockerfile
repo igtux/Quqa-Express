@@ -2,7 +2,7 @@
 # it accepts a fixed, publicly known password.
 FROM alpine:3
 
-RUN apk add --no-cache openssh bash coreutils \
+RUN apk add --no-cache openssh bash coreutils tmux \
  && ssh-keygen -A \
  && adduser -D -s /bin/bash quqa \
  && echo 'quqa:quqa-test-password' | chpasswd \

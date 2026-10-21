@@ -16,8 +16,10 @@
  * unknown host key is shown to the user, who must accept it (trust on first
  * use); a changed key is refused until the user replaces the pin.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
+import { homedir, userInfo } from 'node:os';
+import { basename } from 'node:path';
 import ssh2, {
   type AuthHandlerMiddleware,
   type Client as SshClient,
@@ -35,8 +37,21 @@ import {
   type EngineReply,
   type EngineValue,
 } from '../shared/engine-protocol.js';
-import type { ConnectRequest, PinInfo, SessionEvent, SshErrorCode } from '../shared/ipc.js';
-import type { PromptKind, VaultState } from '../shared/protocol.js';
+import {
+  HOST_PATTERN,
+  USER_PATTERN,
+  type AdhocConnect,
+  type ConnectRequest,
+  type HostAction,
+  type HostInfo,
+  type KeyInfo,
+  type PinInfo,
+  type SessionEvent,
+  type SshConfigEntry,
+  type SshErrorCode,
+  type TmuxMessage,
+} from '../shared/ipc.js';
+import type { PromptKind, TmuxSessionInfo, VaultState } from '../shared/protocol.js';
 import { CallError } from './errors.js';
 import {
   describeHostKey,
@@ -46,7 +61,21 @@ import {
 } from './host-keys.js';
 import { MAX_KNOWN_HOSTS_BYTES, parseKnownHosts } from './known-hosts-file.js';
 import { KnownHosts, type KnownHostsData } from './known-hosts.js';
+import { HostStore } from './hosts.js';
 import { KeyStore, parsePrivateKey } from './keys.js';
+import { mapLimit, tcpPing } from './latency.js';
+import { parseSshConfig, type SshConfigHost } from './ssh-config.js';
+import {
+  attachCommand,
+  historyScript,
+  killCommand,
+  listCommand,
+  MAX_SCROLL_LINES,
+  MAX_TMUX_SESSIONS,
+  parseHistoryState,
+  parseList,
+  type HistoryAction,
+} from './tmux.js';
 import type { KdfParams } from './vault/crypto.js';
 import { DEFAULT_SETTINGS, Vault } from './vault/vault.js';
 
@@ -77,6 +106,12 @@ const MAX_SECRET_ATTEMPTS = 3;
 /** A "host key changed" token stays valid this long. */
 const CHANGE_TOKEN_MS = 10 * 60_000;
 const MAX_KEY_FILE_BYTES = 32 * 1024;
+const MAX_SSH_CONFIG_BYTES = 1024 * 1024;
+/** A parsed ~/.ssh/config waits this long for the user to choose what to import. */
+const SSH_CONFIG_TOKEN_MS = 30 * 60_000;
+/** tmux list / end / history commands. */
+const EXEC_TIMEOUT_MS = 10_000;
+const MAX_EXEC_OUTPUT = 256 * 1024;
 
 const DEFAULTS: Required<Omit<EngineOptions, 'kdf'>> = {
   connectTimeoutMs: 20_000,
@@ -98,7 +133,16 @@ class SshError extends Error {
 
 interface Session {
   id: string;
-  request: ConnectRequest;
+  /** Where to connect; for a saved host it is re-read from the vault on every attempt. */
+  request: AdhocConnect;
+  /** The saved host this session belongs to, or null for Quick Connect. */
+  hostId: string | null;
+  action: HostAction;
+  /** The tmux session the terminal is attached to (null: plain shell). */
+  tmux: string | null;
+  /** The connect counter was raised for this session. */
+  counted: boolean;
+  history: { busy: boolean; scroll: number; queue: HistoryAction[] };
   cols: number;
   rows: number;
   client: Client | null;
@@ -165,6 +209,8 @@ export class Engine {
   private readonly kdf: KdfParams | undefined;
   private vault: Vault | null = null;
   private keys: KeyStore | null = null;
+  private hosts: HostStore | null = null;
+  private sshConfig: { token: string; hosts: SshConfigHost[]; expires: number } | null = null;
   readonly knownHosts: KnownHosts;
   private nextPrompt = 0;
   /** Calls run one at a time, in order (opening the vault finishes before any status call). */
@@ -211,6 +257,9 @@ export class Engine {
         break;
       case 'prompt-answer':
         this.answerPrompt(command.requestId, command.answers, command.remember);
+        break;
+      case 'tmux':
+        this.tmux(command.message);
         break;
       case 'call':
         this.calls = this.calls.then(() =>
@@ -266,7 +315,10 @@ export class Engine {
       await vault.load();
       vault.onChange((state) => this.vaultChanged(state));
       this.vault = vault;
-      this.keys = new KeyStore(vault);
+      const keys = new KeyStore(vault);
+      this.keys = keys;
+      this.hosts = new HostStore(vault, (keyId) => keys.has(keyId));
+      this.sshConfig = null;
       return {};
     },
     'vault.status': async () => {
@@ -302,7 +354,7 @@ export class Engine {
       await this.requireUnlocked().put('settings', 'app', settings);
       return {};
     },
-    'keys.list': async () => ({ keys: this.requireKeys().list() }),
+    'keys.list': async () => ({ keys: this.withUsage(this.requireKeys().list()) }),
     'keys.generate': async ({ label }) => this.requireKeys().generate(label),
     'keys.import': async ({ label, privateKey, passphrase, savePassphrase }) =>
       this.requireKeys().import(label, privateKey, passphrase, savePassphrase),
@@ -320,7 +372,8 @@ export class Engine {
       this.passphrases.delete(id);
       return {};
     },
-    'keys.describe': async ({ id }) => this.requireKeys().describe(id),
+    'keys.describe': async ({ id }) =>
+      this.withUsage([this.requireKeys().describe(id)])[0] as KeyInfo,
     'hostKeys.list': async () => {
       this.requireUnlocked();
       const { pins, hashed } = this.knownHosts.list();
@@ -370,7 +423,164 @@ export class Engine {
       await this.knownHosts.replace(change.host, change.port, change.key);
       return {};
     },
+    'hosts.list': async () => ({ hosts: this.requireHosts().list() }),
+    'hosts.save': async ({ id, host }) => this.requireHosts().save(id, host),
+    'hosts.delete': async ({ id, forgetHostKey }) => {
+      const hosts = this.requireHosts();
+      const removed = await hosts.delete(id);
+      const shared = hosts
+        .list()
+        .some((other) => other.address === removed.address && other.port === removed.port);
+      if (forgetHostKey && !shared) await this.knownHosts.forget(removed.address, removed.port);
+      return {};
+    },
+    'hosts.ping': async ({ ids }) => {
+      const hosts = this.requireHosts();
+      const results = await mapLimit([...new Set(ids)], 16, async (id) => {
+        const host = hosts.get(id);
+        if (!host) return { id, ms: null, error: 'Not saved' };
+        return { id, ...(await tcpPing(host.address, host.port)) };
+      });
+      return { results };
+    },
+    'sshConfig.readPath': async ({ path }) => this.readSshConfig(path),
+    'sshConfig.import': async (params) => this.importSshConfig(params),
+    'ui.get': async () => this.requireHosts().ui(),
+    'ui.save': async (state) => {
+      await this.requireHosts().saveUi(state);
+      return {};
+    },
   };
+
+  private withUsage(keys: KeyInfo[]): KeyInfo[] {
+    const usage = this.hosts?.keyUsage() ?? new Map<string, number>();
+    return keys.map((key) => ({ ...key, usedBy: usage.get(key.id) ?? 0 }));
+  }
+
+  private requireHosts(): HostStore {
+    this.requireUnlocked();
+    if (!this.hosts) throw new CallError('engine', 'The vault is not open');
+    return this.hosts;
+  }
+
+  /* ----- ~/.ssh/config import ---------------------------------------------- */
+
+  private async readSshConfig(path: string) {
+    const hosts = this.requireHosts();
+    const token = randomBytes(16).toString('hex');
+    let text: string;
+    try {
+      text = await readSmallFile(path, MAX_SSH_CONFIG_BYTES, 'The ssh config file is too large');
+    } catch (error) {
+      if (error instanceof CallError && error.code === 'not_found') {
+        this.sshConfig = null;
+        return { found: false, token, entries: [], notes: [] };
+      }
+      throw error;
+    }
+    const parsed = parseSshConfig(text, { home: homedir(), localUser: localUser() });
+    this.sshConfig = { token, hosts: parsed.hosts, expires: Date.now() + SSH_CONFIG_TOKEN_MS };
+    const saved = hosts.list();
+    const entries: SshConfigEntry[] = parsed.hosts.slice(0, 1000).map((entry) => ({
+      alias: entry.alias.slice(0, 255),
+      hostName: entry.hostName.slice(0, 255),
+      user: entry.user.slice(0, 64),
+      port: entry.port >= 1 && entry.port <= 65535 ? entry.port : 22,
+      identityFile: entry.identityFile.slice(0, 4096),
+      proxyJump: clean(entry.proxyJump, 255),
+      problem: configProblem(entry),
+      duplicate: saved.some(
+        (host) =>
+          host.address.toLowerCase() === entry.hostName.toLowerCase() &&
+          host.port === entry.port &&
+          host.username === entry.user,
+      ),
+    }));
+    return { found: true, token, entries, notes: parsed.notes.map((n) => clean(n, 300)) };
+  }
+
+  private async importSshConfig(params: {
+    token: string;
+    aliases: string[];
+    importKeys: boolean;
+    tmux: boolean;
+  }) {
+    const hosts = this.requireHosts();
+    const keys = this.requireKeys();
+    const preview = this.sshConfig;
+    if (!preview || preview.token !== params.token || preview.expires < Date.now()) {
+      throw new CallError('not_found', 'The ssh config preview has expired; read the file again');
+    }
+    const problems: string[] = [];
+    const keyByPath = new Map<string, string | null>();
+    let imported = 0;
+    let importedKeys = 0;
+    const known = () => new Map(keys.list().map((key) => [key.fingerprint, key.id]));
+
+    for (const alias of new Set(params.aliases)) {
+      const entry = preview.hosts.find((host) => host.alias === alias);
+      if (!entry || configProblem(entry)) continue;
+      let keyId: string | null = null;
+      if (params.importKeys && entry.identityFile) {
+        if (!keyByPath.has(entry.identityFile)) {
+          let id: string | null = null;
+          try {
+            const text = await readSmallFile(
+              entry.identityFile,
+              MAX_KEY_FILE_BYTES,
+              'That file is too large to be a private key',
+            );
+            const before = known();
+            const label = clean(basename(entry.identityFile), 64) || 'imported key';
+            const info = await keys.import(label, text, undefined, false);
+            const existing = before.get(info.fingerprint);
+            if (existing) {
+              // The same key is already in the vault: keep one copy.
+              await keys.delete(info.id);
+              id = existing;
+            } else {
+              id = info.id;
+              importedKeys++;
+            }
+          } catch (error) {
+            const reason =
+              error instanceof CallError && error.code === 'needs_passphrase'
+                ? 'is protected by a passphrase; import it under Keys'
+                : error instanceof CallError && error.code === 'not_found'
+                  ? 'was not found'
+                  : 'could not be imported';
+            problems.push(
+              clean(
+                `${alias}: the key ${entry.identityFile} ${reason}; the host logs in with a password for now`,
+                300,
+              ),
+            );
+          }
+          keyByPath.set(entry.identityFile, id);
+        }
+        keyId = keyByPath.get(entry.identityFile) ?? null;
+      }
+      await hosts.save(undefined, {
+        name: configLabel(alias),
+        address: entry.hostName,
+        port: entry.port,
+        username: entry.user,
+        auth: keyId ? { kind: 'key', keyId } : { kind: 'password' },
+        os: 'linux',
+        group: '',
+        tags: ['ssh-config'],
+        notes: '',
+        color: '',
+        tmux: params.tmux,
+        jumpHostId: null,
+        proxyJump: clean(entry.proxyJump, 255),
+        scheme: '',
+        font: '',
+      });
+      imported++;
+    }
+    return { hosts: imported, keys: importedKeys, problems: problems.slice(0, 1000) };
+  }
 
   private requireVault(): Vault {
     if (!this.vault) throw new CallError('engine', 'The vault is not open');
@@ -415,6 +625,7 @@ export class Engine {
 
   connect(sessionId: string, request: ConnectRequest): void {
     if (this.sessions.has(sessionId)) return;
+    const saved = 'hostId' in request;
     if (this.sessions.size >= this.options.maxSessions) {
       this.emit({
         type: 'error',
@@ -427,7 +638,22 @@ export class Engine {
     }
     const session: Session = {
       id: sessionId,
-      request,
+      request: saved
+        ? // Filled in from the saved host by `open`.
+          {
+            host: 'localhost',
+            port: 22,
+            username: 'x',
+            auth: { kind: 'password' },
+            cols: 2,
+            rows: 1,
+          }
+        : request,
+      hostId: saved ? request.hostId : null,
+      action: saved ? request.action : { type: 'shell', tmux: null },
+      tmux: null,
+      counted: false,
+      history: { busy: false, scroll: 0, queue: [] },
       cols: request.cols,
       rows: request.rows,
       client: null,
@@ -530,19 +756,59 @@ export class Engine {
     session.state = 'connecting';
     session.unacked = 0;
     session.paused = false;
+    session.tmux = null;
     const current = () => !session.disposed && session.generation === generation;
 
     try {
+      const host = this.resolveHost(session);
       const client = await this.handshake(session, current);
       if (!current()) {
         client.end();
         return;
       }
+      const { action } = session;
+      const tmuxUsable = host !== null && host.tmux && host.os === 'linux';
+      if (action.type !== 'shell') {
+        // A one-shot connection: (end a session,) list them, report, close.
+        if (action.type === 'end') await this.exec(client, killCommand(action.session));
+        const listed = tmuxUsable
+          ? parseList((await this.exec(client, listCommand())).stdout)
+          : { available: false, sessions: [] };
+        client.end();
+        if (!current()) return;
+        this.emitSessions(session.id, listed.available, listed.sessions);
+        session.state = 'closed';
+        session.client = null;
+        this.emit({ type: 'closed', sessionId: session.id, exitCode: 0 });
+        return;
+      }
+
+      let command: string | null = null;
+      if (tmuxUsable && action.tmux !== null) {
+        const listed = parseList((await this.exec(client, listCommand())).stdout);
+        if (!current()) {
+          client.end();
+          return;
+        }
+        this.emitSessions(session.id, listed.available, listed.sessions);
+        if (listed.available) {
+          const exists = listed.sessions.some((s) => s.name === action.tmux);
+          if (!exists && listed.sessions.length >= MAX_TMUX_SESSIONS) {
+            client.end();
+            throw new SshError(
+              'too_many_sessions',
+              `This host already has ${MAX_TMUX_SESSIONS} resumable sessions; end one first`,
+            );
+          }
+          command = attachCommand(action.tmux);
+        }
+      }
+      const pty = { term: 'xterm-256color', cols: session.cols, rows: session.rows };
       const channel = await new Promise<ClientChannel>((resolve, reject) => {
-        client.shell(
-          { term: 'xterm-256color', cols: session.cols, rows: session.rows },
-          (error, stream) => (error ? reject(error) : resolve(stream)),
-        );
+        const done = (error: Error | undefined, stream: ClientChannel) =>
+          error ? reject(error) : resolve(stream);
+        if (command) client.exec(command, { pty }, done);
+        else client.shell(pty, done);
       }).catch((error: unknown) => {
         client.end();
         throw new SshError(
@@ -555,6 +821,7 @@ export class Engine {
         client.end();
         return;
       }
+      session.tmux = command ? action.tmux : null;
       this.attach(session, generation, client, channel);
     } catch (error) {
       if (!current()) return;
@@ -573,6 +840,117 @@ export class Engine {
       });
       this.emit({ type: 'closed', sessionId: session.id, exitCode: null });
     }
+  }
+
+  /** For a saved host: (re-)reads it so edits apply on the next attempt. */
+  private resolveHost(session: Session): HostInfo | null {
+    if (session.hostId === null) return null;
+    if (this.vault?.state !== 'unlocked') {
+      throw new SshError('vault_locked', 'Unlock the vault to connect');
+    }
+    const host = this.hosts?.get(session.hostId);
+    if (!host) throw new SshError('invalid_request', 'That host is no longer saved');
+    session.request = {
+      host: host.address,
+      port: host.port,
+      username: host.username,
+      auth: host.auth,
+      cols: session.cols,
+      rows: session.rows,
+    };
+    return host;
+  }
+
+  /** Runs one command on an authenticated connection (no PTY); output is capped. */
+  private exec(client: Client, command: string): Promise<{ code: number | null; stdout: string }> {
+    return new Promise((resolve) => {
+      let stdout = '';
+      let settled = false;
+      const finish = (code: number | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve({ code, stdout });
+      };
+      const timer = setTimeout(() => finish(null), EXEC_TIMEOUT_MS);
+      try {
+        client.exec(command, (error, stream) => {
+          if (error) return finish(null);
+          let code: number | null = null;
+          stream.on('data', (chunk: Buffer) => {
+            if (stdout.length < MAX_EXEC_OUTPUT) stdout += chunk.toString('utf8');
+          });
+          stream.stderr.on('data', () => undefined);
+          stream.on('exit', (status: number | null) => {
+            code = typeof status === 'number' ? status : null;
+          });
+          stream.on('close', () => finish(code));
+        });
+      } catch {
+        finish(null);
+      }
+    });
+  }
+
+  private emitSessions(sessionId: string, available: boolean, sessions: TmuxSessionInfo[]) {
+    this.emit({ type: 'tmux-sessions', sessionId, available, sessions });
+  }
+
+  /** tmux over a live terminal's own connection. */
+  tmux(message: TmuxMessage): void {
+    const session = this.sessions.get(message.sessionId);
+    const client = session?.client;
+    if (!session || session.state !== 'ready' || !client) return;
+    if (message.op === 'history') {
+      if (!session.tmux) return;
+      this.queueHistory(session, message.action, message.lines);
+      return;
+    }
+    if (session.hostId === null) return;
+    const run = async () => {
+      if (message.op === 'end') await this.exec(client, killCommand(message.session));
+      const listed = parseList((await this.exec(client, listCommand())).stdout);
+      if (!session.disposed) this.emitSessions(session.id, listed.available, listed.sessions);
+    };
+    void run().catch(() => undefined);
+  }
+
+  /** History actions run one at a time; scrolls that arrive meanwhile are added up. */
+  private queueHistory(session: Session, action: HistoryAction, lines: number) {
+    const history = session.history;
+    if (action === 'scroll') history.scroll += lines;
+    else {
+      if (action === 'exit') history.scroll = 0;
+      if (history.queue.length < 8) history.queue.push(action);
+    }
+    if (history.busy) return;
+    history.busy = true;
+    const pump = async () => {
+      try {
+        for (;;) {
+          const client = session.client;
+          const name = session.tmux;
+          if (!client || !name || session.disposed) break;
+          let next: { action: HistoryAction; lines: number } | null = null;
+          const queued = history.queue.shift();
+          if (queued) next = { action: queued, lines: 0 };
+          else if (history.scroll !== 0) {
+            const step = Math.max(-MAX_SCROLL_LINES, Math.min(MAX_SCROLL_LINES, history.scroll));
+            history.scroll -= step;
+            next = { action: 'scroll', lines: step };
+          }
+          if (!next) break;
+          const { stdout } = await this.exec(client, historyScript(name, next.action, next.lines));
+          const state = parseHistoryState(stdout);
+          if (next.action === 'exit' && state?.inMode) session.channel?.write('q');
+          if (state && !session.disposed)
+            this.emit({ type: 'history', sessionId: session.id, ...state });
+        }
+      } finally {
+        history.busy = false;
+      }
+    };
+    void pump().catch(() => undefined);
   }
 
   /** Connects and authenticates, asking the user about an unknown host key and for secrets. */
@@ -1025,7 +1403,11 @@ export class Engine {
     if (session.cols !== session.request.cols || session.rows !== session.request.rows) {
       channel.setWindow(session.rows, session.cols, 0, 0);
     }
-    this.emit({ type: 'ready', sessionId: session.id });
+    if (session.hostId !== null && !session.counted) {
+      session.counted = true;
+      void this.hosts?.touch(session.hostId).catch(() => undefined);
+    }
+    this.emit({ type: 'ready', sessionId: session.id, tmux: session.tmux });
   }
 
   private teardown(session: Session) {
@@ -1035,6 +1417,31 @@ export class Engine {
     session.client?.destroy();
     session.channel = null;
     session.client = null;
+  }
+}
+
+const HOST_RE = new RegExp(HOST_PATTERN);
+const USER_RE = new RegExp(USER_PATTERN);
+
+/** Why a ~/.ssh/config entry cannot be imported as is; empty when it can. */
+function configProblem(entry: SshConfigHost): string {
+  if (!entry.hostName || entry.hostName.length > 253 || !HOST_RE.test(entry.hostName)) {
+    return 'The host name is not a plain address';
+  }
+  if (!USER_RE.test(entry.user)) return 'No usable user name';
+  if (!(entry.port >= 1 && entry.port <= 65535)) return 'The port is not valid';
+  return '';
+}
+
+function configLabel(alias: string): string {
+  return clean(alias, 64) || 'host';
+}
+
+function localUser(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return '';
   }
 }
 

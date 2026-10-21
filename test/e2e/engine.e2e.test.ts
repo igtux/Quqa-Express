@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import ssh2 from 'ssh2';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Engine, HIGH_WATER_BYTES, type EngineMessage } from '../../src/engine/engine.js';
-import type { ConnectRequest, SessionEvent } from '../../src/shared/ipc.js';
+import type { AdhocConnect, ConnectRequest, SessionEvent } from '../../src/shared/ipc.js';
 
 const { Client, utils } = ssh2;
 
@@ -25,7 +25,7 @@ const PASSWORD = process.env['QUQA_TEST_SSH_PASSWORD'] ?? 'quqa-test-password';
 const VAULT_PASSWORD = 'e2e vault password';
 const FAST_KDF = { memoryKiB: 64, iterations: 1, parallelism: 1 };
 
-const password: ConnectRequest = {
+const password: AdhocConnect = {
   host: HOST ?? 'localhost',
   port: PORT,
   username: USER,

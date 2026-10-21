@@ -7,10 +7,12 @@
  * Ported from Jarvis NG (apps/web/src/terminal/connection.ts), same owner:
  * xterm options, fit pipeline, font ladder and zoom, WebGL with DOM fallback,
  * copy on selection, chunked paste, OSC 52 write-only, automatic reconnect
- * with back-off, bell. Sharing, tmux history and agent heuristics are not
- * part of this app.
+ * with back-off, bell, unread / attention / agent-busy marks, hover preview
+ * lines, tmux history (copy-mode) scrolling with the Live button. Sharing is
+ * not part of this app.
  */
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal as XTerm } from '@xterm/xterm';
@@ -21,7 +23,9 @@ import {
   type PromptKind,
   type SessionEvent,
   type SshErrorCode,
+  type TmuxSessionInfo,
 } from '../../../shared/protocol.js';
+import { ActivityTracker } from './activity.js';
 import {
   sliceInput,
   PASTE_CHUNK,
@@ -29,17 +33,16 @@ import {
   reconnectDelayMs,
   RECONNECT_DELAYS_S,
 } from './input.js';
+import { isLetterKey } from './keys.js';
 import { parseOsc52 } from './osc52.js';
 import { pasteRisks, type PasteRisk } from './paste.js';
 import {
-  clampZoom,
   computeFontSize,
-  FONT_FAMILY,
+  fontById,
+  fontFamily,
   lineHeight,
-  readZoom,
-  saveZoom,
+  schemeById,
   xtermTheme,
-  ZOOM_STEP,
 } from './themes.js';
 
 export type ConnState =
@@ -105,14 +108,51 @@ export interface ConnSnapshot {
   /** Characters still queued from a large paste. */
   pendingInput: number;
   renderer: 'webgl' | 'dom';
+  /** The tmux session the terminal runs in (null: plain shell). */
+  tmux: string | null;
+  /** New output arrived while the terminal was not on screen. */
+  unread: boolean;
+  /** A background terminal rang, or an agent finished / asks something. */
+  attention: boolean;
+  /** An agent is working in it. */
+  busy: boolean;
+  /** Scrolled away from the newest output (local scrollback or tmux history). */
+  scrolledBack: boolean;
+  /** Output arrived while scrolled back. */
+  historyUnread: boolean;
+  /** tmux copy-mode is showing history. */
+  history: boolean;
+  /** Wheel scrolling drives tmux history (tmux sessions only). */
+  historyMode: boolean;
+  /** A short notice (e.g. the tmux session had ended and a new one started). */
+  notice: string | null;
 }
 
-export interface Target {
-  host: string;
-  port: number;
-  username: string;
-  /** No secrets: a key id, or "password" (the engine asks or uses the saved one). */
-  auth: Auth;
+/** A saved host (the engine takes address, user and login from it) or an ad-hoc target. */
+export type Target =
+  | { kind: 'host'; hostId: string; title: string }
+  | {
+      kind: 'adhoc';
+      host: string;
+      port: number;
+      username: string;
+      /** No secrets: a key id, or "password" (the engine asks or uses the saved one). */
+      auth: Auth;
+      title: string;
+    };
+
+export interface SessionCallbacks {
+  onBell?(session: TerminalSession): void;
+  onAttention?(session: TerminalSession, reason: 'finished' | 'choice'): void;
+  onTmuxSessions?(session: TerminalSession, available: boolean, sessions: TmuxSessionInfo[]): void;
+  /** The session reached `ready`. */
+  onReady?(session: TerminalSession): void;
+}
+
+export interface Look {
+  scheme: string;
+  font: string;
+  zoom: number;
 }
 
 /** Routes the bridge's single event stream to sessions by id. */
@@ -144,8 +184,10 @@ export class SessionEvents {
 
 const ACK_BATCH_BYTES = 32 * 1024;
 const ACK_DELAY_MS = 30;
+/** Lines one wheel notch scrolls tmux history. */
+const WHEEL_LINES = 3;
 
-const FATAL_TEXT: Partial<Record<SshErrorCode, string>> = {
+export const FATAL_TEXT: Partial<Record<SshErrorCode, string>> = {
   auth_failed: 'Access denied',
   auth_cancelled: 'Login cancelled',
   vault_locked: 'Vault locked',
@@ -156,49 +198,98 @@ const FATAL_TEXT: Partial<Record<SshErrorCode, string>> = {
   invalid_request: 'Session unavailable',
 };
 
+let nextTag = 0;
+
 export class TerminalSession {
+  /** Names this terminal in the UI and in notifications (`t<n>`). */
+  readonly tag = `t${++nextTag}`;
   readonly element: HTMLDivElement;
   readonly term: XTerm;
   readonly target: Target;
+  readonly createdAt = new Date().toISOString();
+  /** The tmux session to create or re-attach (host targets with tmux on). */
+  readonly requestedTmux: string | null;
+  /** Re-opened from the saved layout (a missing tmux session is then worth a notice). */
+  wasRestored = false;
+  /** The bell and notifications are on for this terminal (header toggle). */
+  private bell = true;
   private readonly api: QuqaApi;
   private readonly events: SessionEvents;
+  private readonly callbacks: SessionCallbacks;
   private readonly fitAddon = new FitAddon();
+  private readonly searchAddon = new SearchAddon();
+  private readonly activity: ActivityTracker;
+  private readonly decoder = new TextDecoder();
   private sessionId: string | null = null;
   private unlisten: (() => void) | null = null;
   private listeners = new Set<() => void>();
-  private snapshot: ConnSnapshot = {
-    state: 'connecting',
-    statusText: 'Connecting…',
-    reason: '',
-    errorCode: null,
-    attempt: 0,
-    hostKey: null,
-    prompt: null,
-    hostKeyChanged: null,
-    pasteRequest: null,
-    clipboardRequest: null,
-    pendingInput: 0,
-    renderer: 'dom',
-  };
+  private snapshot: ConnSnapshot;
   private opened = false;
   private started = false;
   private disposed = false;
-  private zoom = readZoom();
+  private visible = false;
+  private look: Look;
   private lastSize = { cols: 0, rows: 0 };
   private fitTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private ackTimer: ReturnType<typeof setTimeout> | undefined;
   private pasteTimer: ReturnType<typeof setTimeout> | undefined;
   private copyTimer: ReturnType<typeof setTimeout> | undefined;
+  private busyTimer: ReturnType<typeof setInterval> | undefined;
+  private noticeTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingAck = 0;
   private pasteQueue: string[] = [];
+  /** Typed while leaving tmux history; sent once tmux is out of copy-mode. */
+  private afterHistory: string[] = [];
+  private afterHistoryTimer: ReturnType<typeof setTimeout> | undefined;
+  private wheelRest = 0;
   private lastError: { code: SshErrorCode; message: string } | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
-  constructor(api: QuqaApi, events: SessionEvents, target: Target) {
+  constructor(
+    api: QuqaApi,
+    events: SessionEvents,
+    target: Target,
+    options: { tmux?: string | null; look: Look; callbacks?: SessionCallbacks },
+  ) {
     this.api = api;
     this.events = events;
     this.target = target;
+    this.requestedTmux = options.tmux ?? null;
+    this.look = options.look;
+    this.callbacks = options.callbacks ?? {};
+    this.snapshot = {
+      state: 'connecting',
+      statusText: 'Connecting…',
+      reason: '',
+      errorCode: null,
+      attempt: 0,
+      hostKey: null,
+      prompt: null,
+      hostKeyChanged: null,
+      pasteRequest: null,
+      clipboardRequest: null,
+      pendingInput: 0,
+      renderer: 'dom',
+      tmux: null,
+      unread: false,
+      attention: false,
+      busy: false,
+      scrolledBack: false,
+      historyUnread: false,
+      history: false,
+      historyMode: false,
+      notice: null,
+    };
+    this.activity = new ActivityTracker({
+      busy: (busy) => {
+        this.update({ busy });
+        clearInterval(this.busyTimer);
+        this.busyTimer = busy ? setInterval(() => this.activity.tick(), 1000) : undefined;
+      },
+      finished: () => this.raiseAttention('finished'),
+      choice: () => this.raiseAttention('choice'),
+    });
 
     this.element = document.createElement('div');
     this.element.className = 'terminal-xterm-host';
@@ -206,10 +297,10 @@ export class TerminalSession {
     const width = window.innerWidth;
     this.term = new XTerm({
       cursorBlink: true,
-      fontSize: computeFontSize(this.zoom, width),
+      fontSize: computeFontSize(this.look.zoom, width),
       lineHeight: lineHeight(width),
       letterSpacing: 0,
-      fontFamily: FONT_FAMILY,
+      fontFamily: fontFamily(fontById(this.look.font)),
       allowProposedApi: true,
       cols: 80,
       rows: 24,
@@ -217,13 +308,14 @@ export class TerminalSession {
       rescaleOverlappingGlyphs: true,
       fastScrollSensitivity: 5,
       scrollOnUserInput: true,
-      theme: xtermTheme(),
+      theme: xtermTheme(schemeById(this.look.scheme)),
       scrollback: 10000,
       minimumContrastRatio: 4.5,
       convertEol: false,
       // Remote programs may not open links or windows: no link addon.
     });
     this.term.loadAddon(this.fitAddon);
+    this.term.loadAddon(this.searchAddon);
     const unicode = new Unicode11Addon();
     this.term.loadAddon(unicode);
     this.term.unicode.activeVersion = '11';
@@ -242,8 +334,13 @@ export class TerminalSession {
       this.element.classList.remove('bell');
       void this.element.offsetWidth;
       this.element.classList.add('bell');
-      if (!document.hasFocus()) this.api.attention();
+      if (!this.isWatched()) {
+        if (!this.snapshot.attention) this.update({ attention: true });
+        this.callbacks.onBell?.(this);
+      }
     });
+    this.term.onScroll(() => this.checkScrolled());
+    this.term.onWriteParsed(() => this.checkScrolled());
 
     // Selecting copies at once.
     this.term.onSelectionChange(() => {
@@ -271,6 +368,11 @@ export class TerminalSession {
       },
       { capture: true },
     );
+    // In tmux history mode the wheel drives copy-mode on the host.
+    this.element.addEventListener('wheel', (event) => this.onWheel(event), {
+      capture: true,
+      passive: false,
+    });
   }
 
   /* ----- Observing --------------------------------------------------------- */
@@ -292,6 +394,22 @@ export class TerminalSession {
     for (const listener of this.listeners) listener();
   }
 
+  get bellOn(): boolean {
+    return this.bell;
+  }
+
+  setBell(on: boolean): void {
+    this.bell = on;
+  }
+
+  get hostId(): string | null {
+    return this.target.kind === 'host' ? this.target.hostId : null;
+  }
+
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
   /** The rendered text of the buffer (for the UI smoke test). */
   text(): string {
     const buffer = this.term.buffer.active;
@@ -302,7 +420,19 @@ export class TerminalSession {
     return lines.join('\n');
   }
 
-  /* ----- Mounting and size ------------------------------------------------- */
+  /** The last ≤ 18 non-empty lines of the screen, for the dock preview. */
+  previewLines(max = 18): string[] {
+    if (!this.opened) return [];
+    const buffer = this.term.buffer.active;
+    const lines: string[] = [];
+    for (let y = buffer.baseY + this.term.rows - 1; y >= 0 && lines.length < max; y--) {
+      const text = buffer.getLine(y)?.translateToString(true) ?? '';
+      if (text.trim()) lines.unshift(text);
+    }
+    return lines;
+  }
+
+  /* ----- Mounting, size and look ------------------------------------------- */
 
   mount(parent: HTMLElement): void {
     if (this.disposed) return;
@@ -331,6 +461,24 @@ export class TerminalSession {
     if (this.opened) this.term.focus();
   }
 
+  /** On screen in the focused window (the user sees it). */
+  isWatched(): boolean {
+    return this.visible && document.hasFocus() && !document.hidden;
+  }
+
+  /** The workspace shows or hides the terminal (tab switch, split). */
+  setVisible(visible: boolean): void {
+    this.visible = visible;
+    if (visible) {
+      this.clearAttention();
+      this.scheduleFit(30);
+    }
+  }
+
+  clearAttention(): void {
+    this.update({ attention: false, unread: false });
+  }
+
   /** Focus after a dialog has closed (closing a modal <dialog> moves focus itself). */
   private refocus(): void {
     setTimeout(() => {
@@ -346,7 +494,7 @@ export class TerminalSession {
   private fitNow() {
     if (!this.opened || this.disposed) return;
     const width = window.innerWidth;
-    const size = computeFontSize(this.zoom, width);
+    const size = computeFontSize(this.look.zoom, width);
     if (this.term.options.fontSize !== size) this.term.options.fontSize = size;
     const lh = lineHeight(width);
     if (this.term.options.lineHeight !== lh) this.term.options.lineHeight = lh;
@@ -366,43 +514,131 @@ export class TerminalSession {
     }
   }
 
-  setZoom(zoom: number): void {
-    this.zoom = clampZoom(zoom);
-    saveZoom(this.zoom);
+  /** Colour scheme, font and zoom (the theme dialog, per-host looks, Ctrl+= / Ctrl+-). */
+  setLook(look: Look): void {
+    const changed =
+      look.scheme !== this.look.scheme ||
+      look.font !== this.look.font ||
+      look.zoom !== this.look.zoom;
+    this.look = look;
+    if (!changed) return;
+    this.term.options.theme = xtermTheme(schemeById(look.scheme));
+    this.term.options.fontFamily = fontFamily(fontById(look.font));
     this.fitNow();
+    this.scheduleFit(120);
   }
 
   private handleKey(event: KeyboardEvent): boolean {
     if (event.type !== 'keydown') return true;
     const ctrl = event.ctrlKey || event.metaKey;
     // Ctrl+Shift+V pastes, Ctrl+Shift+C copies the selection.
-    if (ctrl && event.shiftKey && event.code === 'KeyV') {
+    if (ctrl && event.shiftKey && isLetterKey(event, 'v')) {
       event.preventDefault();
       void this.pasteFromClipboard();
       return false;
     }
-    if (ctrl && event.shiftKey && event.code === 'KeyC') {
+    if (ctrl && event.shiftKey && isLetterKey(event, 'c')) {
       event.preventDefault();
       const text = this.term.getSelection();
       if (text) void this.api.clipboardWrite(text).catch(() => undefined);
       return false;
     }
-    // Ctrl+= / Ctrl+- / Ctrl+0: zoom.
-    if (ctrl && !event.altKey && (event.key === '=' || event.key === '+')) {
-      event.preventDefault();
-      this.setZoom(this.zoom + ZOOM_STEP);
+    return true;
+  }
+
+  /* ----- Search ------------------------------------------------------------ */
+
+  /** Finds the next (or previous) match in the scrollback; false when there is none. */
+  find(query: string, previous = false): boolean {
+    if (!query) {
+      this.searchAddon.clearDecorations();
       return false;
     }
-    if (ctrl && !event.altKey && event.key === '-') {
-      event.preventDefault();
-      this.setZoom(this.zoom - ZOOM_STEP);
+    const options = {
+      caseSensitive: false,
+      decorations: {
+        matchBackground: '#6366f155',
+        matchOverviewRuler: '#6366f1',
+        activeMatchBackground: '#eab30888',
+        activeMatchColorOverviewRuler: '#eab308',
+      },
+    };
+    return previous
+      ? this.searchAddon.findPrevious(query, options)
+      : this.searchAddon.findNext(query, options);
+  }
+
+  clearSearch(): void {
+    this.searchAddon.clearDecorations();
+    this.term.clearSelection();
+  }
+
+  /* ----- Scrolling and tmux history ---------------------------------------- */
+
+  private checkScrolled() {
+    const buffer = this.term.buffer.active;
+    const back = buffer.viewportY < buffer.baseY;
+    const scrolledBack = back || this.snapshot.history;
+    if (scrolledBack !== this.snapshot.scrolledBack) {
+      this.update({ scrolledBack, ...(!scrolledBack && { historyUnread: false }) });
+    }
+  }
+
+  /** Scroll mode: the wheel scrolls local scrollback (auto) or tmux history. */
+  setHistoryMode(on: boolean): void {
+    if (on && !this.snapshot.tmux) return;
+    this.update({ historyMode: on });
+    if (!on && this.snapshot.history) this.history('exit');
+  }
+
+  private onWheel(event: WheelEvent) {
+    if (!this.snapshot.historyMode || !this.snapshot.tmux || this.snapshot.state !== 'connected') {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const notches = event.deltaMode === 1 ? event.deltaY / 3 : event.deltaY / 100;
+    this.wheelRest += notches * WHEEL_LINES;
+    const lines = Math.trunc(this.wheelRest);
+    if (lines === 0) return;
+    this.wheelRest -= lines;
+    if (!this.snapshot.history) {
+      if (lines > 0) return;
+      this.history('enter');
+    }
+    this.history('scroll', lines);
+  }
+
+  private history(action: 'enter' | 'exit' | 'scroll', lines = 0) {
+    if (!this.sessionId) return;
+    this.api.tmux({ sessionId: this.sessionId, op: 'history', action, lines });
+  }
+
+  /** Back to the newest output: leave tmux history and scroll local scrollback down. */
+  goLive(): void {
+    if (this.snapshot.history) this.history('exit');
+    this.term.scrollToBottom();
+    this.update({ historyUnread: false });
+    this.checkScrolled();
+    this.focus();
+  }
+
+  /* ----- tmux sessions on the host ----------------------------------------- */
+
+  /** Asks the engine to list the host's tmux sessions over this terminal's connection. */
+  refreshTmuxSessions(): boolean {
+    if (!this.sessionId || this.snapshot.state !== 'connected' || this.hostId === null) {
       return false;
     }
-    if (ctrl && !event.altKey && event.key === '0') {
-      event.preventDefault();
-      this.setZoom(0);
+    this.api.tmux({ sessionId: this.sessionId, op: 'list' });
+    return true;
+  }
+
+  endTmuxSession(name: string): boolean {
+    if (!this.sessionId || this.snapshot.state !== 'connected' || this.hostId === null) {
       return false;
     }
+    this.api.tmux({ sessionId: this.sessionId, op: 'end', session: name });
     return true;
   }
 
@@ -414,12 +650,23 @@ export class TerminalSession {
     this.started = true;
     this.fitNow();
     this.update({ state: 'connecting', statusText: 'Connecting…', reason: '', errorCode: null });
+    const size = { cols: Math.max(2, this.term.cols), rows: Math.max(1, this.term.rows) };
     try {
-      const { sessionId } = await this.api.connect({
-        ...this.target,
-        cols: Math.max(2, this.term.cols),
-        rows: Math.max(1, this.term.rows),
-      });
+      const { sessionId } = await this.api.connect(
+        this.target.kind === 'host'
+          ? {
+              hostId: this.target.hostId,
+              action: { type: 'shell', tmux: this.requestedTmux },
+              ...size,
+            }
+          : {
+              host: this.target.host,
+              port: this.target.port,
+              username: this.target.username,
+              auth: this.target.auth,
+              ...size,
+            },
+      );
       if (this.disposed) {
         this.api.disconnect(sessionId);
         return;
@@ -450,6 +697,7 @@ export class TerminalSession {
             fingerprint: event.fingerprint,
           },
         });
+        this.raiseAttention('choice');
         break;
       case 'prompt':
         this.update({
@@ -462,6 +710,7 @@ export class TerminalSession {
             canRemember: event.canRemember,
           },
         });
+        this.raiseAttention('choice');
         break;
       case 'host-key-changed':
         this.update({
@@ -475,6 +724,25 @@ export class TerminalSession {
           },
         });
         break;
+      case 'tmux-sessions':
+        // Re-attaching a session the host no longer has starts a new one: say so.
+        if (
+          this.wasRestored &&
+          this.requestedTmux &&
+          this.snapshot.state !== 'connected' &&
+          event.available &&
+          !event.sessions.some((s) => s.name === this.requestedTmux)
+        ) {
+          this.wasRestored = false;
+          this.showNotice('The session had ended on the host; a new one was started');
+        }
+        this.callbacks.onTmuxSessions?.(this, event.available, event.sessions);
+        break;
+      case 'history':
+        this.update({ history: event.inMode });
+        if (!event.inMode && this.afterHistory.length > 0) this.flushAfterHistory();
+        this.checkScrolled();
+        break;
       case 'ready':
         this.lastError = null;
         this.lastSize = { cols: 0, rows: 0 };
@@ -487,14 +755,23 @@ export class TerminalSession {
           hostKey: null,
           prompt: null,
           hostKeyChanged: null,
+          tmux: event.tmux,
+          history: false,
+          ...(event.tmux === null && { historyMode: false }),
         });
         this.fitNow();
         this.flushPaste();
-        this.focus();
+        if (this.visible) this.focus();
+        this.callbacks.onReady?.(this);
         break;
       case 'data': {
         const length = event.data.byteLength;
         this.term.write(event.data, () => this.acknowledge(length));
+        if (!this.visible && !this.snapshot.unread) this.update({ unread: true });
+        if (this.snapshot.scrolledBack && !this.snapshot.historyUnread) {
+          this.update({ historyUnread: true });
+        }
+        this.activity.output(this.decoder.decode(event.data, { stream: true }));
         break;
       }
       case 'error':
@@ -504,6 +781,18 @@ export class TerminalSession {
         this.handleClosed(event.exitCode);
         break;
     }
+  }
+
+  private showNotice(text: string) {
+    clearTimeout(this.noticeTimer);
+    this.update({ notice: text });
+    this.noticeTimer = setTimeout(() => this.update({ notice: null }), 8000);
+  }
+
+  private raiseAttention(reason: 'finished' | 'choice') {
+    if (this.isWatched()) return;
+    if (!this.snapshot.attention) this.update({ attention: true });
+    this.callbacks.onAttention?.(this, reason);
   }
 
   answerHostKey(accept: boolean): void {
@@ -566,7 +855,9 @@ export class TerminalSession {
   private handleClosed(exitCode: number | null) {
     if (this.disposed) return;
     this.cancelPendingInput();
-    this.update({ prompt: null, pasteRequest: null });
+    this.activity.reset();
+    this.afterHistory = [];
+    this.update({ prompt: null, pasteRequest: null, history: false });
     this.pendingAck = 0;
     const error = this.lastError;
     this.lastError = null;
@@ -637,6 +928,16 @@ export class TerminalSession {
 
   /** Keystrokes and pastes; large input goes in 4 KiB slices. */
   sendInput(data: string): void {
+    // Keys never act as copy-mode commands: leave history first.
+    if (this.snapshot.history) {
+      if (this.afterHistory.length === 0) {
+        this.history('exit');
+        clearTimeout(this.afterHistoryTimer);
+        this.afterHistoryTimer = setTimeout(() => this.flushAfterHistory(), 1500);
+      }
+      if (this.afterHistory.length < 256) this.afterHistory.push(data);
+      return;
+    }
     if (data.length <= PASTE_CHUNK && this.pasteQueue.length === 0) {
       this.sendRaw(data, 'utf8');
       return;
@@ -644,6 +945,14 @@ export class TerminalSession {
     this.pasteQueue.push(...sliceInput(data));
     this.update({ pendingInput: this.queuedLength() });
     this.flushPaste();
+  }
+
+  private flushAfterHistory() {
+    clearTimeout(this.afterHistoryTimer);
+    const queued = this.afterHistory;
+    this.afterHistory = [];
+    this.update({ history: false });
+    for (const data of queued) this.sendInput(data);
   }
 
   async pasteFromClipboard(): Promise<void> {
@@ -698,6 +1007,7 @@ export class TerminalSession {
 
   /* ----- Closing ----------------------------------------------------------- */
 
+  /** Closes the SSH channel and frees xterm. A tmux session keeps running on the host. */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -706,12 +1016,170 @@ export class TerminalSession {
     clearTimeout(this.ackTimer);
     clearTimeout(this.pasteTimer);
     clearTimeout(this.copyTimer);
+    clearTimeout(this.noticeTimer);
+    clearTimeout(this.afterHistoryTimer);
+    clearInterval(this.busyTimer);
     if (this.sessionId) this.api.disconnect(this.sessionId);
     this.unlisten?.();
     this.resizeObserver?.disconnect();
     this.term.dispose();
     this.element.remove();
     this.listeners.clear();
+  }
+}
+
+/** What a host probe shows: its prompts, then the host's tmux sessions. */
+export interface ProbeSnapshot {
+  hostKey: HostKeyPrompt | null;
+  prompt: CredentialPrompt | null;
+  hostKeyChanged: HostKeyChange | null;
+  done: boolean;
+  error: string | null;
+  available: boolean;
+  sessions: TmuxSessionInfo[];
+}
+
+/**
+ * A one-shot connection to a saved host that lists (or ends, then lists) its
+ * tmux sessions, for hosts without an open terminal. Host-key and credential
+ * prompts are answered like a terminal's.
+ */
+export class HostProbe {
+  private sessionId: string | null = null;
+  private unlisten: (() => void) | null = null;
+  private listeners = new Set<() => void>();
+  private lastError: string | null = null;
+  private disposed = false;
+  private snapshot: ProbeSnapshot = {
+    hostKey: null,
+    prompt: null,
+    hostKeyChanged: null,
+    done: false,
+    error: null,
+    available: false,
+    sessions: [],
+  };
+
+  constructor(
+    private readonly api: QuqaApi,
+    private readonly events: SessionEvents,
+    readonly hostId: string,
+    readonly end: string | null,
+    private readonly onResult: (available: boolean, sessions: TmuxSessionInfo[]) => void,
+  ) {}
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  getSnapshot = (): ProbeSnapshot => this.snapshot;
+
+  private update(change: Partial<ProbeSnapshot>) {
+    this.snapshot = { ...this.snapshot, ...change };
+    for (const listener of this.listeners) listener();
+  }
+
+  async start(): Promise<void> {
+    try {
+      const { sessionId } = await this.api.connect({
+        hostId: this.hostId,
+        action: this.end ? { type: 'end', session: this.end } : { type: 'list' },
+        cols: 80,
+        rows: 24,
+      });
+      if (this.disposed) {
+        this.api.disconnect(sessionId);
+        return;
+      }
+      this.sessionId = sessionId;
+      this.unlisten = this.events.listen(sessionId, (event) => this.receive(event));
+    } catch (error) {
+      this.update({ done: true, error: friendlyInvokeError(error) });
+    }
+  }
+
+  private receive(event: SessionEvent) {
+    switch (event.type) {
+      case 'host-key':
+        this.update({
+          hostKey: {
+            requestId: event.requestId,
+            host: event.host,
+            port: event.port,
+            algorithm: event.algorithm,
+            fingerprint: event.fingerprint,
+          },
+        });
+        break;
+      case 'prompt':
+        this.update({
+          prompt: {
+            requestId: event.requestId,
+            kind: event.kind,
+            title: event.title,
+            message: event.message,
+            prompts: event.prompts,
+            canRemember: event.canRemember,
+          },
+        });
+        break;
+      case 'host-key-changed':
+        this.update({
+          hostKeyChanged: {
+            requestId: event.requestId,
+            host: event.host,
+            port: event.port,
+            algorithm: event.algorithm,
+            fingerprint: event.fingerprint,
+            previous: event.previous,
+          },
+        });
+        break;
+      case 'tmux-sessions':
+        this.update({ available: event.available, sessions: event.sessions });
+        this.onResult(event.available, event.sessions);
+        break;
+      case 'error':
+        this.lastError = event.message;
+        break;
+      case 'closed':
+        this.update({ done: true, error: this.lastError, hostKey: null, prompt: null });
+        this.dispose();
+        break;
+      default:
+        break;
+    }
+  }
+
+  answerHostKey(accept: boolean): void {
+    const prompt = this.snapshot.hostKey;
+    if (!prompt) return;
+    this.api.answerHostKey({ requestId: prompt.requestId, accept });
+    this.update({ hostKey: null });
+  }
+
+  answerPrompt(answers: string[] | null, remember: boolean): void {
+    const prompt = this.snapshot.prompt;
+    if (!prompt) return;
+    this.api.answerPrompt({ requestId: prompt.requestId, answers, remember });
+    this.update({ prompt: null });
+  }
+
+  async replaceHostKey(): Promise<string | null> {
+    const change = this.snapshot.hostKeyChanged;
+    if (!change) return null;
+    const result = await this.api.call('hostKeys.replace', { requestId: change.requestId });
+    if (!result.ok) return result.message;
+    this.update({ hostKeyChanged: null });
+    return null;
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.sessionId) this.api.disconnect(this.sessionId);
+    this.unlisten?.();
   }
 }
 

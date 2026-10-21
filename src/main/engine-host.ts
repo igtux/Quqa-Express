@@ -19,6 +19,8 @@ const EVENT_TYPES = new Set([
   'host-key-changed',
   'prompt',
   'ready',
+  'tmux-sessions',
+  'history',
   'data',
   'error',
   'closed',

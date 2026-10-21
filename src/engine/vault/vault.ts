@@ -45,8 +45,8 @@ export const VAULT_VERSION = 1;
 /** Largest vault file we read (keys are small; this is thousands of them). */
 const MAX_FILE_BYTES = 32 * 1024 * 1024;
 
-export type ItemKind = 'key' | 'password' | 'known-hosts' | 'settings';
-const ITEM_KEY = /^(key|password|known-hosts|settings)\/[A-Za-z0-9_.:-]{1,128}$/;
+export type ItemKind = 'key' | 'password' | 'known-hosts' | 'settings' | 'host';
+const ITEM_KEY = /^(key|password|known-hosts|settings|host)\/[A-Za-z0-9_.:-]{1,128}$/;
 
 const B64 = Type.String({ maxLength: 16 * 1024 * 1024, pattern: '^[A-Za-z0-9+/]*={0,2}$' });
 const SealedBox = Type.Object({ nonce: B64, sealed: B64 }, { additionalProperties: false });
