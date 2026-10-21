@@ -69,7 +69,7 @@ test('creates the vault and shows the first-run welcome and the hosts screen', a
   const form = page.getByRole('form', { name: 'Create vault' });
   await expect(form).toBeVisible();
   // Without an OS key store (e.g. Linux without a keyring) a password is required.
-  const password = form.getByLabel('Master password');
+  const password = form.getByLabel('Master password', { exact: true });
   if (await password.isVisible()) {
     await password.fill(VAULT_PASSWORD);
     await form.getByLabel('Repeat the password').fill(VAULT_PASSWORD);
@@ -114,7 +114,7 @@ test('after a restart the vault opens again and the window keeps its size', asyn
   // An OS-protected vault unlocks by itself; a password vault asks.
   await expect(unlock.or(hosts)).toBeVisible();
   if (await unlock.isVisible()) {
-    const password = unlock.getByLabel('Master password');
+    const password = unlock.getByLabel('Master password', { exact: true });
     if (await password.isVisible()) await password.fill(VAULT_PASSWORD);
     await unlock.getByRole('button', { name: 'Unlock' }).click();
   }
