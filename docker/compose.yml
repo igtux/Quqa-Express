@@ -1,0 +1,43 @@
+# Development stack: a build/test container and a disposable SSH server on a
+# private network. From the repository root:
+#
+#   docker compose -f docker/compose.yml build
+#   docker compose -f docker/compose.yml run --rm dev pnpm install
+#   docker compose -f docker/compose.yml run --rm dev pnpm check
+#   docker compose -f docker/compose.yml run --rm dev pnpm test:e2e
+#   docker compose -f docker/compose.yml run --rm dev pnpm test:ui
+name: quqa-express-dev
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: dev.Dockerfile
+    image: quqa-express-dev:latest
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - pnpm-store:/home/ubuntu/.local/share/pnpm/store
+      - electron-cache:/home/ubuntu/.cache/electron
+    environment:
+      QUQA_TEST_SSH_HOST: test-sshd
+      QUQA_TEST_SSH_PORT: '22'
+      QUQA_TEST_SSH_USER: quqa
+      QUQA_TEST_SSH_PASSWORD: quqa-test-password
+    # Chromium needs more shared memory than Docker's 64 MB default.
+    shm_size: 1gb
+    depends_on: [test-sshd]
+    networks: [quqa-dev]
+
+  test-sshd:
+    build:
+      context: ./test-sshd
+    image: quqa-express-test-sshd:latest
+    networks: [quqa-dev]
+
+volumes:
+  pnpm-store:
+  electron-cache:
+
+networks:
+  quqa-dev:

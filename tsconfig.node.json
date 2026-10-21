@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"]
+  },
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*",
+    "src/engine/**/*",
+    "src/shared/**/*",
+    "test/e2e/**/*",
+    "electron.vite.config.ts",
+    "vitest.config.ts"
+  ]
+}

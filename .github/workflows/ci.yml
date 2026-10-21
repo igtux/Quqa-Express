@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: pnpm check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # The engine's end-to-end tests need an SSH server; Linux runners have Docker.
+      - name: Start the test SSH server
+        if: runner.os == 'Linux'
+        run: |
+          docker build -t quqa-express-test-sshd docker/test-sshd
+          docker run -d --name test-sshd -p 2222:22 quqa-express-test-sshd
+          {
+            echo "QUQA_TEST_SSH_HOST=localhost"
+            echo "QUQA_TEST_SSH_PORT=2222"
+            echo "QUQA_TEST_SSH_USER=quqa"
+            echo "QUQA_TEST_SSH_PASSWORD=quqa-test-password"
+          } >> "$GITHUB_ENV"
+
+      - run: pnpm check
+
+      - name: UI smoke test
+        if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm test:ui
+
+  windows-build:
+    name: Windows installer and portable build
+    needs: check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm dist:win
+        env:
+          # Unsigned build: keep electron-builder from looking for a certificate.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quqa-express-windows
+          path: |
+            release/*/*.exe
+          if-no-files-found: error
+          retention-days: 14

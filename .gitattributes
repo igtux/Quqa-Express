@@ -1,0 +1,6 @@
+# LF everywhere, so Prettier's check passes on Windows checkouts too.
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.icns binary
+*.ttf binary

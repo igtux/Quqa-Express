@@ -1,0 +1,13 @@
+# Single package. Dependencies allowed to run install scripts; everything else
+# is blocked. (Electron fetches its binary on first use, not at install.)
+allowBuilds:
+  esbuild: true
+  # Optional native speed-ups for ssh2; it works in pure JavaScript without
+  # them, which keeps compilers and native code out of the build.
+  ssh2: false
+  cpu-features: false
+  # Squirrel.Windows installer helper; we build NSIS and portable targets only.
+  electron-winstaller: false
+
+# electron-builder packages a flat node_modules.
+nodeLinker: hoisted

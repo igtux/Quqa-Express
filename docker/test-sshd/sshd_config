@@ -1,0 +1,12 @@
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+PermitRootLogin no
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+Subsystem sftp internal-sftp
+MaxStartups 100:30:200
+# Tests open many short connections; do not penalise the runner for it.
+PerSourcePenalties no

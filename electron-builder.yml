@@ -1,0 +1,53 @@
+# Packaging. Unsigned by design: Windows SmartScreen will warn on first run.
+appId: io.github.igtux.quqa-express
+productName: Quqa Express
+copyright: Copyright © Quqa Express contributors
+directories:
+  output: release/${version}
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - '!**/*.map'
+asar: true
+# ssh2's optional native add-ons are not built; it runs in pure JavaScript.
+npmRebuild: false
+nodeGypRebuild: false
+extraMetadata:
+  main: out/main/index.js
+publish: null
+# Electron fuses (flipped in the packaged binary). File-protocol privileges stay
+# on while the page loads from file://; a custom app:// protocol is backlog.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: true
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  # No code signing.
+  signAndEditExecutable: true
+  forceCodeSigning: false
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+portable:
+  artifactName: ${productName}-Portable-${version}-${arch}.${ext}
+linux:
+  target: [AppImage]
+  category: System
+mac:
+  target: [dmg]
+  category: public.app-category.developer-tools
+  identity: null
