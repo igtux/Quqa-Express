@@ -424,6 +424,8 @@ body {
 
 .terminal-notice {
   position: absolute;
+  /* Above xterm's WebGL and link-layer canvases, or its buttons cannot be clicked. */
+  z-index: 6;
   left: 50%;
   bottom: 24px;
   transform: translateX(-50%);

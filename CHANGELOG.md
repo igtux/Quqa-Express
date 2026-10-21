@@ -24,6 +24,11 @@ start of its GitHub release notes and of what the in-app update panel shows
   and types its path. Copied or dropped files have their paths typed.
 - When the shell exits, the tab shows the exit code and **Start again**.
 
+### Fixed
+
+- The **Reconnect** / **Start again** button on a terminal's notice could not
+  be clicked when the terminal drew with WebGL (the usual case on Windows).
+
 ### Notes
 
 - Local tabs have no tmux: closing one ends the shell and the programs in
