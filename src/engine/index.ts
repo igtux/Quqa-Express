@@ -1,26 +1,10 @@
 /**
- * Entry point of the SSH engine utilityProcess. Main forks it at start-up and
- * talks to it over `process.parentPort`; the renderer cannot reach it.
+ * Entry point of the SSH engine utilityProcess. On Windows, programs inside
+ * the packaged app.asar cannot be started (Electron redirects only
+ * `execFile`), and ssh2 talks to Pageant through its bundled `pagent.exe`;
+ * so `spawn` is pointed at the unpacked copy before ssh2 is loaded.
  */
-import { Engine, type EngineMessage } from './engine.js';
+import { spawnFromUnpacked } from './asar.js';
 
-interface ParentPort {
-  on(event: 'message', listener: (event: { data: unknown }) => void): void;
-  postMessage(message: unknown): void;
-}
-
-const parentPort = (process as unknown as { parentPort?: ParentPort }).parentPort;
-if (!parentPort) {
-  console.error('The SSH engine must run as an Electron utilityProcess');
-  process.exit(1);
-}
-
-const engine = new Engine((message: EngineMessage) => parentPort.postMessage(message));
-parentPort.on('message', ({ data }) => engine.handle(data));
-process.on('uncaughtException', (error) => {
-  // Never log request contents: they may hold credentials.
-  console.error('SSH engine error:', error.name);
-});
-process.on('unhandledRejection', (error) => {
-  console.error('SSH engine error:', (error as Error | null)?.name ?? 'rejection');
-});
+if (process.platform === 'win32') spawnFromUnpacked();
+await import('./process.js');

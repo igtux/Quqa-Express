@@ -14,6 +14,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal as XTerm } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
@@ -333,10 +334,18 @@ export class TerminalSession {
       scrollback: 10000,
       minimumContrastRatio: 4.5,
       convertEol: false,
-      // Remote programs may not open links or windows: no link addon.
+      // OSC 8 hyperlinks can show one address and open another: they stay inert.
+      linkHandler: { activate: () => undefined },
     });
     this.term.loadAddon(this.fitAddon);
     this.term.loadAddon(this.searchAddon);
+    // Addresses printed in the output open in the system browser on Ctrl+click
+    // (a plain click selects); main opens only http(s) links.
+    this.term.loadAddon(
+      new WebLinksAddon((event, uri) => {
+        if (event.ctrlKey || event.metaKey) this.api.openExternal(uri);
+      }),
+    );
     const unicode = new Unicode11Addon();
     this.term.loadAddon(unicode);
     this.term.unicode.activeVersion = '11';

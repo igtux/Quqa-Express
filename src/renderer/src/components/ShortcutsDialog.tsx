@@ -17,14 +17,25 @@ export const SHORTCUTS: [string, string][] = [
   ['Ctrl+Shift+H', 'Hosts'],
   ['Ctrl+Shift+F', 'Search the scrollback (Enter next, Shift+Enter previous)'],
   ['Ctrl+Shift+C / Ctrl+Shift+V', 'Copy / paste (right click pastes too)'],
+  ['Ctrl+click a link', 'Open an http(s) address in your browser'],
   ['Ctrl+= / Ctrl+- / Ctrl+0', 'Larger / smaller / default text'],
   ['F11', 'Full screen'],
   ['F1', 'This list'],
 ];
 
-export function ShortcutsDialog({ onClose }: { onClose(): void }) {
+export function ShortcutsDialog({ onClose, onAbout }: { onClose(): void; onAbout(): void }) {
   return (
-    <Dialog title="Keyboard shortcuts" onClose={onClose} cancelLabel="Close" wide>
+    <Dialog
+      title="Keyboard shortcuts"
+      onClose={onClose}
+      cancelLabel="Close"
+      wide
+      footer={
+        <button type="button" className="system-btn ghost inline" onClick={onAbout}>
+          About quqa-express
+        </button>
+      }
+    >
       <table className="shortcuts-table">
         <tbody>
           {SHORTCUTS.map(([keys, what]) => (

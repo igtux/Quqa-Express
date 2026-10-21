@@ -9,10 +9,19 @@ import type { SshConfigImported, SshConfigPreview } from '../../../shared/ipc.js
 import { call, messageOf } from '../api.js';
 import { Dialog } from '../components/Dialog.js';
 
-export function SshConfigImport({ onClose, onImported }: { onClose(): void; onImported(): void }) {
+export function SshConfigImport({
+  onClose,
+  onImported,
+  withKeys = false,
+}: {
+  onClose(): void;
+  onImported(): void;
+  /** Tick "Import the IdentityFile keys" from the start (first run). */
+  withKeys?: boolean;
+}) {
   const [preview, setPreview] = useState<SshConfigPreview | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
-  const [importKeys, setImportKeys] = useState(false);
+  const [importKeys, setImportKeys] = useState(withKeys);
   const [tmux, setTmux] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);

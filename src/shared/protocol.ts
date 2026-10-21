@@ -47,6 +47,8 @@ export const Channel = {
    * the preload reads it from a real drop with `webUtils.getPathForFile`.
    */
   grantFiles: 'files:grant',
+  /** send: open an http(s) link in the system browser (main checks it) */
+  openExternal: 'window:open-external',
 } as const;
 
 export const MAX_PASSWORD_LENGTH = 1024;

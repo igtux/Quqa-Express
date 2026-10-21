@@ -1,7 +1,7 @@
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { contentSecurityPolicy } from '../shared/csp.js';
-import { APP_ENTRY, contentTypeOf, isAppUrl, resolveAppPath } from './urls.js';
+import { APP_ENTRY, contentTypeOf, externalUrl, isAppUrl, resolveAppPath } from './urls.js';
 
 describe('isAppUrl', () => {
   it('allows only the app:// origin in a build', () => {
@@ -43,7 +43,7 @@ describe('resolveAppPath', () => {
     'app://quqa/assets/../../../main/index.js',
   ])('never leaves the renderer folder for %s', (url) => {
     const file = resolveAppPath(url, root);
-    expect(file === null || file.startsWith(root + (root.endsWith('/') ? '' : '/'))).toBe(true);
+    expect(file === null || file.startsWith(root + sep)).toBe(true);
   });
 
   it.each([
@@ -77,5 +77,37 @@ describe('contentSecurityPolicy', () => {
     expect(policy).not.toContain('http:');
     expect(policy).not.toContain('ws:');
     expect(policy).toContain("object-src 'none'");
+  });
+});
+
+describe('externalUrl', () => {
+  it('passes plain http(s) links', () => {
+    expect(externalUrl('https://github.com/igtux/Quqa-Express')).toBe(
+      'https://github.com/igtux/Quqa-Express',
+    );
+    expect(externalUrl('http://example.com/a?b=1#c')).toBe('http://example.com/a?b=1#c');
+  });
+
+  it.each([
+    'file:///C:/Windows/System32/calc.exe',
+    'javascript:alert(1)',
+    'ms-settings:privacy',
+    'smb://server/share',
+    'app://quqa/index.html',
+    'https://user:pass@example.com/',
+    'https://user@example.com/',
+    'https://example.com/a b',
+    'https://example.com/\u0007',
+    'https://',
+    'not a url',
+    '',
+    `https://example.com/${'a'.repeat(3000)}`,
+  ])('refuses %s', (url) => {
+    expect(externalUrl(url)).toBeNull();
+  });
+
+  it('refuses things that are not strings', () => {
+    expect(externalUrl(undefined)).toBeNull();
+    expect(externalUrl({ href: 'https://example.com/' })).toBeNull();
   });
 });

@@ -1,10 +1,10 @@
 {
   "name": "quqa-express",
-  "productName": "Quqa Express",
+  "productName": "quqa-express",
   "version": "0.1.0",
   "description": "Offline, single-user SSH terminal for the desktop.",
   "license": "Apache-2.0",
-  "author": "Quqa Express contributors",
+  "author": "AURA and the quqa-express contributors",
   "homepage": "https://github.com/igtux/Quqa-Express",
   "repository": {
     "type": "git",
@@ -30,8 +30,9 @@
     "test:e2e": "vitest run test/e2e",
     "test:ui": "electron-vite build && playwright test",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "dist:win": "electron-vite build && electron-builder --win nsis portable --x64",
-    "dist:linux": "electron-vite build && electron-builder --linux AppImage"
+    "dist:win": "electron-vite build && electron-builder --win nsis portable --x64 && node scripts/checksums.mjs",
+    "dist:linux": "electron-vite build && electron-builder --linux AppImage",
+    "test:smoke": "playwright test test/ui/smoke.spec.ts"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",
@@ -50,6 +51,7 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "electron": "44.9.0",

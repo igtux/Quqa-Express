@@ -299,27 +299,60 @@ prompts and paste warnings, left open here, were finished in Phase 2.
 
 ## Phase 5: Windows packaging, CI, release
 
+**Status: done** (first pre-release `v0.1.0-beta.1`). Design: ADR 0005. The
+owner chose to keep releases simple: no code signing, no Microsoft Store, no
+SBOM or provenance attestations (moved to "later"), and a portable `.exe`
+instead of a zip.
+
+- 5.1 done: NSIS per-user installer (no admin; Start menu and desktop
+  shortcuts; the uninstaller asks before deleting `%APPDATA%\quqa-express`,
+  default No) and a portable exe that keeps `quqa-express-data\` next to
+  itself; fuses as in Phase 1; `pagent.exe` unpacked from the asar so
+  Pageant works in the packaged app. Product name `quqa-express`, version
+  0.1.0, icon (`build/icon.svg` → `.ico`/`.png`, `scripts/icons.mjs`).
+- 5.2 done: CI runs `pnpm check` on Ubuntu (with the Docker SSH server for
+  the end-to-end tests, `pnpm audit --audit-level high`, the Playwright UI
+  tests) and on Windows (end-to-end tests skip without Docker); a Windows job
+  packages the app, smoke-tests the packaged build with Playwright (vault
+  created with DPAPI, first-run welcome, About, restart), and uploads the
+  installer, portable exe and checksums. Every failed test is listed in one
+  annotation (`scripts/ci-failures.mjs`), since job logs need a login.
+- 5.3 done: a `v*` tag runs `release.yml` on windows-latest (check, smoke
+  test, build, `SHA256SUMS.txt`) and publishes a GitHub release, a
+  pre-release when the tag has a suffix, with the SmartScreen and checksum
+  notes; only `GITHUB_TOKEN` with `contents: write`.
+- Release polish: About (F1 → About), first-run welcome offering the ssh
+  config (with its key files), known_hosts and the Keys screen, window size
+  and position remembered, Ctrl+click on `http(s)` links in terminals (main
+  re-checks them), Windows test fixes (named-pipe agent test, POSIX-shell
+  tests skipped, path joins).
+- Moved to v1.x: leaving tmux copy-mode after a reconnect, an explicit
+  host-key re-check when a host's address changes (the next connection
+  already checks), known_hosts write-back, the sound packs (v1 has a chime),
+  agent confirm-each-use.
+
 ### 5.1 Packaging
 - **AC:** electron-builder produces an unsigned NSIS installer (per-user
-  install, no admin) and a portable zip; Electron fuses set (RunAsNode off,
+  install, no admin) and a portable exe; Electron fuses set (RunAsNode off,
   NODE_OPTIONS off, inspect args off, asar integrity on, only load from
   asar); app data in `%APPDATA%\quqa-express` (portable: next to the exe);
   uninstall keeps the vault unless asked.
 - **Port:** — (new).
 
 ### 5.2 CI on GitHub Actions
-- **AC:** `windows-latest` (and `ubuntu-latest` for lint/tests) runs
-  `pnpm install --frozen-lockfile`, `pnpm check`, an end-to-end smoke test
-  (Playwright for Electron) against an ssh2 test server, `pnpm audit`
-  (fail on high), CycloneDX SBOM, secret scanning; builds the installer and
-  zip as artifacts on every push to `main`.
+- **AC:** `windows-latest` and `ubuntu-latest` run
+  `pnpm install --frozen-lockfile` and `pnpm check`; Ubuntu adds the
+  end-to-end tests against the Docker SSH server, `pnpm audit` (fail on
+  high) and the UI tests; Windows packages the app, smoke-tests the packaged
+  build with Playwright for Electron and keeps the installer and portable exe
+  as artifacts on every push to `main`.
 - **Port:** Jarvis CI's security-scan ideas (`AGENTS.md` workflow).
 
 ### 5.3 Release
-- **AC:** a tag `v*` builds, writes `SHA256SUMS.txt`, adds build provenance
-  attestations, attaches installer, zip, checksums and SBOM to a GitHub
-  Release with notes that explain the SmartScreen warning and how to
-  verify checksums; README install section matches.
+- **AC:** a tag `v*` builds, writes `SHA256SUMS.txt` and attaches the
+  installer, the portable exe and the checksums to a GitHub (pre-)release
+  with notes that explain the SmartScreen warning and how to verify the
+  checksums; README install section matches.
 - **Port:** — (new).
 
 ---
@@ -327,9 +360,12 @@ prompts and paste warnings, left open here, were finished in Phase 2.
 ## After v1 (v1.x / later)
 
 Toolbar key buttons, background cap/parking, "Where it runs", quick
-commands, transfer queue (pause, recents), agent confirm-each-use, history overlay from `capture-pane`, scrollback
+commands, transfer queue (pause, recents), agent confirm-each-use, history
+overlay from `capture-pane`, leave tmux copy-mode after a reconnect, host-key
+re-check on an address change, known_hosts write-back, sound packs, scrollback
 export, configurable shortcuts, per-host themes, "My sounds", host list
 export/import, RSA/ECDSA generation; later: macOS and Linux builds, multiple
 windows, proxies, FIDO2 keys, edit remote files
-locally, session logging, opt-in unsigned self-update check, optional AI
+locally, session logging, opt-in unsigned self-update check, SBOM and build
+provenance attestations for releases, code signing, optional AI
 recap with the user's own API key (Jarvis ADR 0029, `term/summaries.ts`).

@@ -104,7 +104,7 @@ export function migrateVaultFile(
     raw === null ||
     (raw as { format?: unknown }).format !== VAULT_FORMAT
   ) {
-    throw new CallError('corrupt', 'The vault file is not a Quqa Express vault');
+    throw new CallError('corrupt', 'The vault file is not a quqa-express vault');
   }
   let file = raw as Record<string, unknown>;
   const found = file['version'];
@@ -115,7 +115,7 @@ export function migrateVaultFile(
   if (version > VAULT_VERSION) {
     throw new CallError(
       'newer_version',
-      'The vault was saved by a newer version of Quqa Express; update the app to open it',
+      'The vault was saved by a newer version of quqa-express; update the app to open it',
     );
   }
   while (version < VAULT_VERSION) {

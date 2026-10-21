@@ -15,8 +15,13 @@ import {
 
 const NAME = `quqa-${'0123456789abcdef'.repeat(2)}`;
 
+// These run the scripts in a real POSIX shell, which Windows does not have.
+const posix = process.platform !== 'win32';
+
 describe('shell quoting', () => {
-  it.each([`x'; touch /tmp/pwned; echo '`, '$(id)', '`id`', 'a b\tc\nd', '--help', '*', "''"])(
+  it
+    .runIf(posix)
+    .each([`x'; touch /tmp/pwned; echo '`, '$(id)', '`id`', 'a b\tc\nd', '--help', '*', "''"])(
     'keeps %j one literal word',
     (value) => {
       const out = execFileSync('/bin/sh', ['-c', sh`printf %s ${value}`.text], {
@@ -56,7 +61,7 @@ describe('tmux commands', () => {
     expect(historyScript(NAME, 'enter')).toContain(`tmux copy-mode -t '=${NAME}:'`);
   });
 
-  it('list runs in a POSIX shell when tmux is missing', () => {
+  it.runIf(posix)('list runs in a POSIX shell when tmux is missing', () => {
     // A PATH with `sh` and nothing else.
     const bin = mkdtempSync(join(tmpdir(), 'quqa-sh-'));
     symlinkSync('/bin/sh', join(bin, 'sh'));

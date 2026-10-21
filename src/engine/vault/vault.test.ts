@@ -235,7 +235,7 @@ describe('files, backups and versions', () => {
     };
     expect(migrateVaultFile(legacy, migrations)).toEqual(v1);
     expect(() => migrateVaultFile(legacy)).toThrow(/cannot be upgraded/);
-    expect(() => migrateVaultFile({ format: 'other', version: 1 })).toThrow(/not a Quqa/);
+    expect(() => migrateVaultFile({ format: 'other', version: 1 })).toThrow(/not a quqa-express/);
     expect(() => migrateVaultFile({ ...v1, extra: true })).toThrow(/damaged/);
     expect(() =>
       migrateVaultFile({ ...v1, items: { 'bad kind/x': { nonce: '', sealed: '' } } }),

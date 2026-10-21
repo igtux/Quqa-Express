@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- quqa-express app icon: a terminal prompt ">" and a "q" on Jarvis indigo. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4338ca"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="104" fill="url(#bg)"/>
+  <rect x="60" y="92" width="392" height="328" rx="44" fill="#0a0a0f"/>
+  <g fill="none" stroke="#22c55e" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M124 188l72 68-72 68"/>
+    <circle cx="318" cy="244" r="58"/>
+    <path d="M376 244v120"/>
+  </g>
+</svg>

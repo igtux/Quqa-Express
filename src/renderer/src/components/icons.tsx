@@ -76,3 +76,24 @@ export function Icon({
     </svg>
   );
 }
+
+/** The app icon (build/icon.svg), for the About dialog and the welcome screen. */
+export function AppLogo({ size = 48 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 512 512" aria-hidden="true" className="app-logo">
+      <defs>
+        <linearGradient id="quqa-logo-bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#6366f1" />
+          <stop offset="1" stopColor="#4338ca" />
+        </linearGradient>
+      </defs>
+      <rect x="16" y="16" width="480" height="480" rx="104" fill="url(#quqa-logo-bg)" />
+      <rect x="60" y="92" width="392" height="328" rx="44" fill="#0a0a0f" />
+      <g fill="none" stroke="#22c55e" strokeWidth="40" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M124 188l72 68-72 68" />
+        <circle cx="318" cy="244" r="58" />
+        <path d="M376 244v120" />
+      </g>
+    </svg>
+  );
+}

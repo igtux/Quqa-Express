@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { HostInfo, KeyInfo, PinInfo, VaultStatus } from '../../shared/ipc.js';
 import { call, messageOf } from './api.js';
+import { AboutDialog } from './components/AboutDialog.js';
 import { FileBrowser } from './components/FileBrowser.js';
 import { ForwardsPanel } from './components/Forwards.js';
 import { HostKeysPanel } from './components/HostKeysPanel.js';
@@ -22,6 +23,7 @@ import { FavoritesBar, TabStrip } from './components/TabStrip.js';
 import { TerminalView } from './components/TerminalView.js';
 import { ThemeDialog } from './components/ThemeDialog.js';
 import { SetupScreen, UnlockScreen } from './components/VaultScreens.js';
+import { WelcomeDialog } from './components/WelcomeDialog.js';
 import { HostsPanel } from './hosts/HostsPanel.js';
 import { SessionEvents } from './terminal/connection.js';
 import { digitKey, isLetterKey, isTextField } from './terminal/keys.js';
@@ -50,6 +52,9 @@ export function App() {
   const [quickConnect, setQuickConnect] = useState(false);
   const [theme, setTheme] = useState(false);
   const [shortcuts, setShortcuts] = useState(false);
+  const [about, setAbout] = useState(false);
+  /** Right after the vault was created: offer to import from ~/.ssh. */
+  const [welcome, setWelcome] = useState(false);
   useSyncExternalStore(workspace.subscribe, workspace.getVersion);
 
   const refresh = useCallback(() => {
@@ -251,7 +256,17 @@ export function App() {
     );
   }
 
-  if (status.state === 'absent') return <SetupScreen status={status} onDone={setStatus} />;
+  if (status.state === 'absent') {
+    return (
+      <SetupScreen
+        status={status}
+        onDone={(next) => {
+          setStatus(next);
+          setWelcome(true);
+        }}
+      />
+    );
+  }
   if (!unlocked && workspace.terms.size === 0) {
     return <UnlockScreen status={status} onDone={setStatus} />;
   }
@@ -352,7 +367,27 @@ export function App() {
             onApply={(change) => workspace.updateUi(change)}
           />
         )}
-        {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}
+        {shortcuts && (
+          <ShortcutsDialog
+            onClose={() => setShortcuts(false)}
+            onAbout={() => {
+              setShortcuts(false);
+              setAbout(true);
+            }}
+          />
+        )}
+        {about && <AboutDialog onClose={() => setAbout(false)} />}
+        {welcome && (
+          <WelcomeDialog
+            onClose={() => setWelcome(false)}
+            onImported={loadLists}
+            onShowKeys={() => {
+              setWelcome(false);
+              workspace.showHome();
+              setSection('keys');
+            }}
+          />
+        )}
         {workspace.files && <FileBrowser workspace={workspace} view={workspace.files} />}
         {workspace.probes.map((probe, index) => (
           <ProbeDialogs key={index} probe={probe} onClose={() => workspace.closeProbe(probe)} />

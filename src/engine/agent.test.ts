@@ -7,7 +7,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import ssh2, { type Connection, type ParsedKey } from 'ssh2';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { HostInput } from '../shared/ipc.js';
@@ -16,6 +16,7 @@ import { Engine, type EngineMessage } from './engine.js';
 import { fingerprintOf } from './host-keys.js';
 
 const { AgentProtocol, Server, utils } = ssh2;
+const onWindows = process.platform === 'win32';
 
 const cleanups: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
@@ -35,7 +36,8 @@ function newKey(comment?: string): ParsedKey {
 /** A fake ssh-agent holding one key; counts signatures. */
 async function fakeAgent(key: ParsedKey) {
   const dir = await mkdtemp(join(tmpdir(), 'quqa-agent-'));
-  const path = join(dir, 'agent.sock');
+  // Windows has no Unix sockets in a temp folder; the OpenSSH agent uses a named pipe there too.
+  const path = onWindows ? `\\\\.\\pipe\\${basename(dir)}` : join(dir, 'agent.sock');
   const stats = { signs: 0, lists: 0 };
   const server = createServer((socket) => {
     const protocol = new AgentProtocol(false);
@@ -191,45 +193,55 @@ describe('the SSH agent', () => {
       message: 'Pageant exists only on Windows',
       keys: [],
     });
-    const gone = await listAgentKeys('system', { ok: true, path: join(tmpdir(), 'no-such.sock') });
+    const missing = onWindows ? '\\\\.\\pipe\\quqa-no-such-agent' : join(tmpdir(), 'no-such.sock');
+    const gone = await listAgentKeys('system', { ok: true, path: missing });
     expect(gone).toMatchObject({ available: false, keys: [] });
   });
 
-  it('logs in with the agent, and forwards it only when the host allows it', async () => {
-    const key = newKey();
-    const agent = await fakeAgent(key);
-    const server = await sshServer(key);
-    const previous = process.env['SSH_AUTH_SOCK'];
-    process.env['SSH_AUTH_SOCK'] = agent.path;
-    cleanups.push(() => {
-      if (previous === undefined) delete process.env['SSH_AUTH_SOCK'];
-      else process.env['SSH_AUTH_SOCK'] = previous;
-    });
-    const { engine, events, waitFor } = await engineWithVault();
+  // On Windows the engine always uses the OpenSSH pipe, so a fake agent cannot stand in.
+  it.skipIf(onWindows)(
+    'logs in with the agent, and forwards it only when the host allows it',
+    async () => {
+      const key = newKey();
+      const agent = await fakeAgent(key);
+      const server = await sshServer(key);
+      const previous = process.env['SSH_AUTH_SOCK'];
+      process.env['SSH_AUTH_SOCK'] = agent.path;
+      cleanups.push(() => {
+        if (previous === undefined) delete process.env['SSH_AUTH_SOCK'];
+        else process.env['SSH_AUTH_SOCK'] = previous;
+      });
+      const { engine, events, waitFor } = await engineWithVault();
 
-    const plain = await engine.call('hosts.save', { host: host(server.port, false) });
-    engine.handle({
-      type: 'connect',
-      sessionId: 's1',
-      request: { hostId: plain.id, action: { type: 'shell', tmux: null }, cols: 80, rows: 24 },
-    });
-    await waitFor((e) => e.type === 'ready' && e.sessionId === 's1');
-    expect(events.some((e) => e.type === 'prompt')).toBe(false);
-    expect(agent.stats.signs).toBe(1);
-    await waitFor((e) => e.type === 'data' && e.sessionId === 's1');
-    expect(server.seen.agentRequests).toBe(0);
+      const plain = await engine.call('hosts.save', { host: host(server.port, false) });
+      engine.handle({
+        type: 'connect',
+        sessionId: 's1',
+        request: { hostId: plain.id, action: { type: 'shell', tmux: null }, cols: 80, rows: 24 },
+      });
+      await waitFor((e) => e.type === 'ready' && e.sessionId === 's1');
+      expect(events.some((e) => e.type === 'prompt')).toBe(false);
+      expect(agent.stats.signs).toBe(1);
+      await waitFor((e) => e.type === 'data' && e.sessionId === 's1');
+      expect(server.seen.agentRequests).toBe(0);
 
-    const forwarding = await engine.call('hosts.save', { host: host(server.port, true) });
-    engine.handle({
-      type: 'connect',
-      sessionId: 's2',
-      request: { hostId: forwarding.id, action: { type: 'shell', tmux: null }, cols: 80, rows: 24 },
-    });
-    await waitFor((e) => e.type === 'ready' && e.sessionId === 's2');
-    expect(server.seen.agentRequests).toBe(1);
-  });
+      const forwarding = await engine.call('hosts.save', { host: host(server.port, true) });
+      engine.handle({
+        type: 'connect',
+        sessionId: 's2',
+        request: {
+          hostId: forwarding.id,
+          action: { type: 'shell', tmux: null },
+          cols: 80,
+          rows: 24,
+        },
+      });
+      await waitFor((e) => e.type === 'ready' && e.sessionId === 's2');
+      expect(server.seen.agentRequests).toBe(1);
+    },
+  );
 
-  it('fails clearly when the agent does not hold an accepted key', async () => {
+  it.skipIf(onWindows)('fails clearly when the agent does not hold an accepted key', async () => {
     const accepted = newKey();
     const other = newKey();
     const agent = await fakeAgent(other);

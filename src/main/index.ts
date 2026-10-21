@@ -5,8 +5,9 @@
  * frame. The renderer's files are served from app://quqa by our own protocol
  * handler (no file:// access).
  */
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   app,
   BrowserWindow,
@@ -15,6 +16,8 @@ import {
   Menu,
   Notification,
   protocol,
+  screen,
+  shell,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
@@ -41,8 +44,16 @@ import {
 import { EngineHost } from './engine-host.js';
 import { Grants } from './grants.js';
 import { hardenSessions } from './security.js';
-import { APP_ENTRY, APP_SCHEME, contentTypeOf, isAppUrl, resolveAppPath } from './urls.js';
+import {
+  APP_ENTRY,
+  APP_SCHEME,
+  contentTypeOf,
+  externalUrl,
+  isAppUrl,
+  resolveAppPath,
+} from './urls.js';
 import { VaultBroker } from './vault-broker.js';
+import { MIN_SIZE, placeWindow, readWindowState, writeWindowState } from './window-state.js';
 
 const here = import.meta.dirname;
 /** What the preload sends for dropped files: their local paths, checked again by Grants. */
@@ -50,9 +61,30 @@ const GrantPaths = Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { 
 const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
 const testHooks = process.env['QUQA_TEST_HOOKS'] === '1';
 
-// The UI smoke test runs against a throw-away profile.
+// The UI smoke test runs against a throw-away profile. The portable build
+// keeps its profile (vault included) in a folder next to the .exe.
 const testUserData = testHooks ? process.env['QUQA_USER_DATA'] : undefined;
+const portableDir = process.env['PORTABLE_EXECUTABLE_DIR'];
 if (testUserData) app.setPath('userData', testUserData);
+else if (app.isPackaged && portableDir)
+  app.setPath('userData', join(portableDir, 'quqa-express-data'));
+else adoptEarlyProfile();
+
+/**
+ * Builds before 0.1.0 were called "Quqa Express", so their profile folder
+ * was too. Copy that vault over once, if this profile has none yet.
+ */
+function adoptEarlyProfile() {
+  const vault = join(app.getPath('userData'), 'vault.json');
+  const early = join(dirname(app.getPath('userData')), 'Quqa Express', 'vault.json');
+  try {
+    if (existsSync(vault) || !existsSync(early)) return;
+    mkdirSync(dirname(vault), { recursive: true });
+    copyFileSync(early, vault);
+  } catch {
+    // The user can still create a new vault.
+  }
+}
 
 // Chromium's renderer sandbox for every renderer, before the app is ready.
 app.enableSandbox();
@@ -203,6 +235,10 @@ function start() {
   on(Channel.fullScreen, Type.Null(), () => {
     window?.setFullScreen(!window.isFullScreen());
   });
+  ipcMain.on(Channel.openExternal, (event, text: unknown) => {
+    const url = trusted(event) ? externalUrl(text) : null;
+    if (url) void shell.openExternal(url).catch(() => undefined);
+  });
   /** Only while the window is in the background; a click brings the terminal to the front. */
   const shown = new Set<Notification>();
   on(Channel.notify, NotifyMessage, (_event, message) => {
@@ -211,7 +247,7 @@ function start() {
     }
     window.flashFrame(true);
     const notification = new Notification({
-      title: message.title || 'Quqa Express',
+      title: message.title || 'quqa-express',
       body: message.body,
       silent: true,
     });
@@ -265,14 +301,19 @@ function start() {
     });
   }
 
+  const statePath = join(app.getPath('userData'), 'window-state.json');
+
   function createWindow() {
+    const placed = placeWindow(
+      readWindowState(statePath),
+      screen.getAllDisplays().map((d) => d.workArea),
+    );
     window = new BrowserWindow({
-      width: 1100,
-      height: 720,
-      minWidth: 480,
-      minHeight: 320,
+      ...placed.bounds,
+      minWidth: MIN_SIZE.width,
+      minHeight: MIN_SIZE.height,
       backgroundColor: '#0a0a0f',
-      title: 'Quqa Express',
+      title: 'quqa-express',
       show: false,
       autoHideMenuBar: true,
       webPreferences: {
@@ -290,7 +331,18 @@ function start() {
         ...(testHooks && { additionalArguments: ['--quqa-test-hooks'] }),
       },
     });
-    window.once('ready-to-show', () => window?.show());
+    window.once('ready-to-show', () => {
+      if (placed.maximized) window?.maximize();
+      window?.show();
+    });
+    // Remember size and place (the normal bounds, also while maximized).
+    window.on('close', () => {
+      if (!window || window.isFullScreen()) return;
+      writeWindowState(statePath, {
+        bounds: window.getNormalBounds(),
+        maximized: window.isMaximized(),
+      });
+    });
     window.on('focus', () => window?.flashFrame(false));
     window.on('closed', () => {
       for (const [sessionId, owner] of owners) {

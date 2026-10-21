@@ -1,0 +1,103 @@
+name: Release
+
+# A tag such as v0.1.0 or v0.1.0-beta.1 builds the Windows installer and the
+# portable exe on windows-latest, smoke-tests the packaged app, and publishes
+# them with SHA256SUMS.txt as a GitHub release (a pre-release when the tag
+# has a suffix such as -beta.1). Unsigned by design (docs/adr/0005).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build and publish (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: The tag matches package.json
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            "v$version" | "v$version"-*) echo "Releasing $tag (package $version)" ;;
+            *) echo "::error::Tag $tag does not match package.json version $version"; exit 1 ;;
+          esac
+
+      # Lint, typecheck and unit tests (the Docker SSH tests run in CI on Linux).
+      - run: pnpm check
+      - name: List every failed test
+        if: failure()
+        run: node scripts/ci-failures.mjs test-results/vitest.json
+
+      - run: pnpm build
+      - name: Package for the smoke test
+        run: pnpm exec electron-builder --win dir --x64 -c.electronFuses.enableNodeCliInspectArguments=true -c.directories.output=release/smoke
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke test the packaged app
+        run: pnpm test:smoke
+        env:
+          QUQA_APP_EXECUTABLE: ${{ github.workspace }}\release\smoke\win-unpacked\quqa-express.exe
+
+      - name: Build the installer and the portable exe
+        run: pnpm exec electron-builder --win nsis portable --x64
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: node scripts/checksums.mjs
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          dir="release/$version"
+          tag="${GITHUB_REF_NAME}"
+          prerelease=""
+          case "$tag" in *-*) prerelease="--prerelease" ;; esac
+          {
+            echo "quqa-express $tag for Windows 10 and 11 (x64)."
+            echo
+            echo "## Download"
+            echo
+            echo "- \`quqa-express-$version-setup.exe\`: installer, for your user only (no administrator rights), with Start menu and desktop shortcuts. Uninstalling keeps your vault unless you ask for it to be removed."
+            echo "- \`quqa-express-$version-portable.exe\`: no installation; keeps its data in a \`quqa-express-data\` folder next to the exe."
+            echo
+            echo "## Unsigned: Windows SmartScreen will warn"
+            echo
+            echo "These builds are not code-signed. On first start Windows shows \"Windows protected your PC\": click **More info**, then **Run anyway**. Check the download first:"
+            echo
+            echo '```powershell'
+            echo "Get-FileHash .\\quqa-express-$version-setup.exe -Algorithm SHA256"
+            echo '```'
+            echo
+            echo "The hash must match the line in \`SHA256SUMS.txt\`:"
+            echo
+            echo '```'
+            cat "$dir/SHA256SUMS.txt"
+            echo '```'
+            echo
+            echo "Built by GitHub Actions from commit ${GITHUB_SHA}."
+          } > release-notes.md
+          gh release create "$tag" \
+            "$dir/quqa-express-$version-setup.exe" \
+            "$dir/quqa-express-$version-portable.exe" \
+            "$dir/SHA256SUMS.txt" \
+            --title "quqa-express $tag" \
+            --notes-file release-notes.md \
+            --verify-tag $prerelease

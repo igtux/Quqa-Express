@@ -73,7 +73,7 @@ Short names used below:
 | Per-host / per-tab theme override | — | v1.x | New: a host may carry its own scheme (e.g. red for production). **Built early (Phase 3): colour scheme and font per host.** |
 | Fit pipeline (fonts ready, debounce, ResizeObserver), resize sent to the PTY | `term/connection.ts` | v1 | Same; resize is an IPC intent to the engine. |
 | Classic look (application chrome) | `web/styles/legacy`, `web/kit/` | v1 | The app chrome reuses the Classic look and kit controls (dialogs, toasts, icons). |
-| Clickable links: only `http(s)://`, opened with noopener | `term/connection.ts` (WebLinksAddon) | v1 | Opened in the system browser via `shell.openExternal` after a scheme allow-list check in main; never inside the app. |
+| Clickable links: only `http(s)://`, opened with noopener | `term/connection.ts` (WebLinksAddon) | v1 | Opened in the system browser via `shell.openExternal` after a scheme allow-list check in main; never inside the app. **Built (Phase 5): Ctrl+click on an `http(s)` address (a plain click selects); main re-checks the URL (no credentials, no other schemes); OSC 8 hyperlinks stay inert because their text can hide the target.** |
 
 ## 3. Sessions, persistence and reconnect
 
@@ -101,7 +101,7 @@ Short names used below:
 | Local xterm scrollback | `term/connection.ts` | v1 | Same. |
 | Scroll mode "S": *auto* (wheel scrolls local scrollback or goes to full-screen apps) / *terminal history* (wheel drives tmux copy-mode) | `term/connection.ts`, `gw/terminals/tmux-history.ts` | v1 | Same three fixed tmux actions (enter, scroll N, exit) run by the engine. **Built (Phase 3).** |
 | "Live" button: leave history, jump to newest output, unread hint while reading | `term/connection.ts`, `term/TerminalModal.tsx` | v1 | Same. **Built (Phase 3).** |
-| Typing leaves history first so keys never act as copy-mode commands; tmux is taken out of copy-mode after reconnect | `term/connection.ts` | v1 | Same. **Built (Phase 3) for typing; leaving copy-mode after a reconnect is not done yet.** |
+| Typing leaves history first so keys never act as copy-mode commands; tmux is taken out of copy-mode after reconnect | `term/connection.ts` | v1 | Same. **Built (Phase 3) for typing; leaving copy-mode after a reconnect is v1.x.** |
 | Search in scrollback (Enter next, Shift+Enter previous, highlighted matches) | legacy-ui `01b` §9.3 (legacy history overlay; not in NG) | v1 | xterm search addon, Ctrl+Shift+F. **Built (Phase 3).** |
 | History overlay from tmux `capture-pane` | legacy-ui `01b` §9.3 | v1.x | Optional full tmux history snapshot, searchable. |
 | Export scrollback to a text file | — | v1.x | New; saved through the main process file dialog. |
@@ -148,7 +148,7 @@ Short names used below:
 | Feature | Jarvis | Status | quqa-express mapping |
 | --- | --- | --- | --- |
 | Host: display name, address, port, SSH user, type (Linux/Windows), key, description, optional file roots | `mach/HostForms.tsx`, Jarvis FEATURES "Hosts and keys" | v1 | Same fields plus optional password auth, jump host, tmux toggle, colour/tags. **Built (Phase 3); file roots, upload folder, agent, agent forwarding, OSC 52 choice and saved forwards since Phase 4.** |
-| Add Host form and Edit Host dialog; changing address or port re-checks host-key trust | `mach/HostForms.tsx` | v1 | Same. **Built (Phase 3); re-checking the host key on an address change is not done yet.** |
+| Add Host form and Edit Host dialog; changing address or port re-checks host-key trust | `mach/HostForms.tsx` | v1 | Same. **Built (Phase 3); the next connection to a changed address checks its key (prompt on first use, block on change); an explicit "Re-check" on save is v1.x.** |
 | Delete host | `mach/SshManager.tsx` | v1 | Same (asks; offers to forget its pinned keys). **Built (Phase 3), optionally forgetting the pinned key.** |
 | SSH Manager: dashboard (total hosts, online/offline, avg latency), host cards with Open Terminal, Files, Edit, Ping, Test reachability, More | `mach/SshManager.tsx` | v1 | Same; becomes the start screen. **Built (Phase 3) with a compact status line instead of stat cards, plus Sessions, Duplicate and favorite; Files and Install key since Phase 4.** |
 | Live latency per host: one SSH keepalive round trip on the pooled connection, cached 20 s; Ping all hosts | `gw/ssh/connection-pool.ts`, `mach/SshManager.tsx` | v1 | Same; only for hosts with a live connection, plus TCP connect time for others (no ICMP). **Built (Phase 3) as the TCP connect time to the SSH port, no login (ADR 0003).** |
@@ -191,7 +191,7 @@ Short names used below:
 | Trust dialog: compare SHA256 fingerprints, tick the ones to pin, "Trust host" | `mach/HostKeyTrust.tsx`, `term/HostKeyDialog.tsx` | v1 | First connection shows the prompt (TOFU with an explicit decision: Jarvis has no TOFU because a server shares it; on one's own desktop the prompt is the standard model). The engine pins what it scanned, never key material from the renderer. **Built (Phase 2) as the first-connection prompt.** |
 | Changed key blocks the connection; "SSH host key changed" dialog with the previous fingerprint and a warning; "Trust replacement key" | `mach/HostKeyTrust.tsx`, legacy-ui `01b` §10.4 | v1 | Same; replacement needs a deliberate second confirm. **Built (Phase 2).** |
 | Re-check host key (Edit Host) | `mach/HostForms.tsx` | v1 | Same. |
-| Read `~/.ssh/known_hosts` (incl. hashed entries) as an extra trust source; optional write-back | — | v1 | New: import pins from known_hosts; write-back is off by default. **Import built (Phase 2); write-back not yet.** |
+| Read `~/.ssh/known_hosts` (incl. hashed entries) as an extra trust source; optional write-back | — | v1 | New: import pins from known_hosts; write-back is off by default. **Import built (Phase 2), also offered on first run (Phase 5); write-back is v1.x.** |
 | Strict mode (never prompt, refuse unknown keys) | — | v1.x | Setting. |
 
 ## 10. Sessions dock, favorites and switcher
@@ -216,7 +216,7 @@ Short names used below:
 | Terminal bell (BEL) rings only when global sounds are on, the terminal's own bell is on (default off) and nobody is watching it | `term/bell.ts`, `term/TerminalProvider.tsx` | v1 | Same; "watching" = tab visible and window focused. **Built (Phase 3) with a per-terminal mute in the header (on by default) and the global notification and chime switches.** |
 | Agent finished / asks a question (Claude Code working markers, then quiet) → attention mark + completion alert, at most once per 30 s | `term/connection.ts`, `term/TerminalProvider.tsx` | v1 | Same heuristics, client-side. **Built (Phase 3).** |
 | Desktop notification "<name> needs you" in the background | `term/TerminalProvider.tsx` | v1 | Native notification via Electron; clicking focuses that tab. Taskbar flash/badge on Windows. **Built (Phase 3).** |
-| Sound packs Knight (12) and Default (5), single sound or shuffle, preview, volume | `term/bell.ts`, `term/soundPacks.ts` | v1 | Bundled with the app (sound files owned by AURA, ported). **Not yet: a synthesized chime instead of the packs (ADR 0003).** |
+| Sound packs Knight (12) and Default (5), single sound or shuffle, preview, volume | `term/bell.ts`, `term/soundPacks.ts` | v1 | Bundled with the app (sound files owned by AURA, ported). **v1 ships a synthesized chime instead (ADR 0003); the packs are v1.x.** |
 | "My sounds": add MP3/WAV/OGG/M4A (≤ 2 MB each, 30 total) | `term/bell.ts`, `term/soundStore.ts` | v1.x | Stored in the app data folder. |
 | Notice island under the toolbar (uploads, clipboard, copy, paste progress) | `term/notices.ts`, `term/NoticeIsland.tsx` | v1 | Same. **Built (Phase 4): transfers, pasted paths, copies, errors.** |
 | Settings follow the account (ADR 0032) | `term/bell.ts`, `term/themes.ts` | excluded | No accounts: one local settings file. |
@@ -250,6 +250,18 @@ Short names used below:
 | Claude energy tube / usage probe | Jarvis ADR 0033, 0034 | Server feature. |
 | Discord panel, Agent Teams | legacy-ui `01b` §11 | Server/collaboration. |
 
+## 15. Desktop app and release (new, no Jarvis counterpart)
+
+| Feature | Jarvis | Status | quqa-express mapping |
+| --- | --- | --- | --- |
+| Windows installer: per user, no administrator rights, Start menu and desktop shortcuts, uninstall keeps the vault unless the user says yes | — | v1 | **Built (Phase 5):** NSIS via electron-builder, `quqa-express-<version>-setup.exe`. |
+| Portable exe, profile next to the exe | — | v1 | **Built (Phase 5):** `quqa-express-<version>-portable.exe`, data in `quqa-express-data\`. |
+| Unsigned builds, SHA256SUMS.txt, GitHub (pre-)releases from tags | — | v1 | **Built (Phase 5):** `.github/workflows/release.yml`; SmartScreen note and checksum steps in README and release notes (ADR 0005). |
+| App icon, About (version, licence, source, origin) | — | v1 | **Built (Phase 5):** F1 → About quqa-express. |
+| First run: create the vault, then offer to import hosts (ssh config, with key files), known_hosts and keys | — | v1 | **Built (Phase 5).** |
+| Window size, position and maximized state remembered; one instance (a second start focuses the window) | — | v1 | **Built (Phase 5)**; single instance since Phase 1. |
+| Build provenance attestations, SBOM, code signing, auto-update | — | later | Left out to keep releases simple; an opt-in update check stays "later" (AGENTS.md rule 8). |
+
 ## v1 at a glance
 
 Electron app with hardened IPC and an isolated SSH engine; tabs and two-pane
@@ -264,4 +276,5 @@ key import with passphrase, password and keyboard-interactive login, public
 key install, SSH agent (OpenSSH pipe, Pageant); local port forwarding and
 jump hosts; pinned host keys with TOFU prompt, changed-key block and
 known_hosts import; bell, agent-finished attention, desktop notifications,
-sound packs; Windows NSIS installer and portable zip.
+a chime; first-run import from `~/.ssh`; Windows per-user installer and
+portable exe (unsigned), with SHA256SUMS and GitHub pre-releases.

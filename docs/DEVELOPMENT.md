@@ -34,8 +34,9 @@ Windows.
 | `pnpm check`     | `lint` (ESLint + Prettier), `typecheck`, `test`                |
 | `pnpm test`      | Vitest: unit tests, plus `test/e2e` when an SSH server is set  |
 | `pnpm test:e2e`  | only the SSH engine end-to-end tests                           |
-| `pnpm test:ui`   | builds, then the Playwright `_electron` smoke test             |
-| `pnpm dist:win`  | unsigned NSIS installer + portable `.exe` in `release/<ver>/`  |
+| `pnpm test:ui`   | builds, then every Playwright `_electron` test in `test/ui`    |
+| `pnpm test:smoke`| only `test/ui/smoke.spec.ts` (start-up, vault, About, restart) |
+| `pnpm dist:win`  | unsigned installer + portable `.exe` + `SHA256SUMS.txt` in `release/<ver>/` |
 | `pnpm format`    | Prettier, writing                                              |
 
 `pnpm dev` and `pnpm start` open a window, so run them on your desktop
@@ -86,19 +87,59 @@ attaches through the inspector.
 
 ## Windows builds
 
-`pnpm dist:win` uses electron-builder (`electron-builder.yml`): NSIS
-installer and portable executable for x64, no code signing (SmartScreen warns
-on first start). It works natively on Windows and cross-builds from Linux in
-the Wine image:
+`pnpm dist:win` uses electron-builder (`electron-builder.yml`, ADR 0005):
+`quqa-express-<version>-setup.exe` (NSIS, per user, no admin) and
+`quqa-express-<version>-portable.exe` for x64, no code signing (SmartScreen
+warns on first start), then `scripts/checksums.mjs` writes
+`SHA256SUMS.txt`. It works natively on Windows and cross-builds from Linux
+in the Wine image:
 
 ```sh
-pnpm build   # in the dev container
-docker run --rm -u 1000:1000 -e HOME=/tmp/home \
+docker compose -f docker/compose.yml run --rm dev pnpm build
+docker run --rm -u 1000:1000 -e HOME=/tmp/home -e CSC_IDENTITY_AUTO_DISCOVERY=false \
   -v "$PWD":/project -w /project electronuserland/builder:wine \
-  node node_modules/electron-builder/cli.js --win nsis portable --x64
+  sh -c 'node node_modules/electron-builder/cli.js --win nsis portable --x64 && node scripts/checksums.mjs'
 ```
 
-CI builds the Windows artifacts on `windows-latest` and uploads them.
+The uninstaller's "also delete your data?" question is in
+`build/installer.nsh`. The icon is drawn in `build/icon.svg`;
+`node scripts/icons.mjs` (needs `rsvg-convert`) renders `build/icon.png` and
+`build/icon.ico` from it, and both are committed.
+
+To smoke-test a packaged build (CI does this on Windows), package it with the
+inspect fuse on, which Playwright needs, and point the test at the exe:
+
+```sh
+pnpm exec electron-builder --win dir --x64 \
+  -c.electronFuses.enableNodeCliInspectArguments=true -c.directories.output=release/smoke
+QUQA_APP_EXECUTABLE=release/smoke/win-unpacked/quqa-express.exe pnpm test:smoke
+```
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull requests:
+`pnpm check` on Ubuntu (with the Docker SSH server, so the end-to-end tests
+run; plus `pnpm audit --audit-level high` and the UI tests under Xvfb) and on
+Windows (the end-to-end tests skip there), then a Windows job packages the
+app, runs the smoke test against it and uploads the installer, the portable
+exe and the checksums as an artifact. Job logs need a GitHub login, so a
+failing test run also writes one annotation listing every failed test
+(`scripts/ci-failures.mjs`), readable through the public API:
+`/repos/igtux/Quqa-Express/check-runs/<job id>/annotations`.
+
+To release, set the version in `package.json`, commit, then push an
+annotated tag:
+
+```sh
+git tag -a v0.1.0-beta.1 -m "quqa-express 0.1.0 beta 1"
+git push origin v0.1.0-beta.1
+```
+
+`.github/workflows/release.yml` checks that the tag matches the version (a
+suffix such as `-beta.1` is allowed and makes a pre-release), runs
+`pnpm check` and the packaged smoke test on windows-latest, builds, and
+publishes the setup exe, the portable exe and `SHA256SUMS.txt` with notes on
+SmartScreen and checksums. It uses only `GITHUB_TOKEN`.
 
 ## Layout
 
@@ -115,4 +156,6 @@ src/renderer/  React UI: hosts/ (hosts screen, forms, ssh config import),
 test/e2e/      engine against a real SSH server
 test/ui/       Playwright smoke test of the Electron app
 docker/        dev image, compose stack, test SSH server
+build/         icon (SVG source, .ico, .png) and the NSIS uninstaller hook
+scripts/       icons, SHA256SUMS.txt, CI failure summary
 ```

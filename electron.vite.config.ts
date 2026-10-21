@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'electron-vite';
@@ -22,6 +23,8 @@ function csp(): Plugin {
     },
   };
 }
+
+const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string };
 
 export default defineConfig({
   main: {
@@ -52,5 +55,7 @@ export default defineConfig({
       rollupOptions: { input: resolve('src/renderer/index.html') },
     },
     plugins: [react(), csp()],
+    // Shown in the About dialog.
+    define: { __APP_VERSION__: JSON.stringify(version) },
   },
 });

@@ -21,15 +21,16 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # The engine's end-to-end tests need an SSH server; Linux runners have Docker.
+      # The engine's end-to-end tests need an SSH server in Docker (Linux
+      # runners only). Without QUQA_TEST_SSH_HOST they skip, as on Windows.
       - name: Start the test SSH server
         if: runner.os == 'Linux'
         run: |
@@ -44,30 +45,54 @@ jobs:
 
       - run: pnpm check
 
-      - name: UI smoke test
+      - name: List every failed test
+        if: failure()
+        run: node scripts/ci-failures.mjs test-results/vitest.json
+
+      - name: Dependency audit (high and critical)
+        if: runner.os == 'Linux'
+        run: pnpm audit --audit-level high
+
+      - name: UI tests (Playwright drives the built app)
         if: runner.os == 'Linux'
         run: xvfb-run -a pnpm test:ui
 
   windows-build:
-    name: Windows installer and portable build
+    name: Windows installer, portable build and smoke test
     needs: check
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm dist:win
+      - run: pnpm build
+
+      # Smoke test of the packaged app: same app.asar and fuses as the release,
+      # except the inspect fuse, which Playwright needs to attach.
+      - name: Package for the smoke test
+        run: pnpm exec electron-builder --win dir --x64 -c.electronFuses.enableNodeCliInspectArguments=true -c.directories.output=release/smoke
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Smoke test the packaged app
+        run: pnpm test:smoke
+        env:
+          QUQA_APP_EXECUTABLE: ${{ github.workspace }}\release\smoke\win-unpacked\quqa-express.exe
+
+      - name: Build the installer and the portable exe
+        run: pnpm exec electron-builder --win nsis portable --x64
         env:
           # Unsigned build: keep electron-builder from looking for a certificate.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: node scripts/checksums.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: quqa-express-windows
           path: |
             release/*/*.exe
+            release/*/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14

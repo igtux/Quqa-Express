@@ -1,6 +1,8 @@
 import type { QuqaApi } from '../../shared/ipc.js';
 
 declare global {
+  /** The app version from package.json (set at build time). */
+  const __APP_VERSION__: string;
   interface Window {
     readonly quqa: QuqaApi;
     /** Present only when the app runs for the UI smoke test. */

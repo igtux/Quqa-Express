@@ -24,6 +24,7 @@ export default tseslint.config(
       'src/preload/**',
       'src/engine/**',
       'test/**',
+      'scripts/**',
       '*.config.ts',
       '*.config.js',
     ],
@@ -51,6 +52,11 @@ export default tseslint.config(
         },
       ],
     },
+  },
+  {
+    // Build scripts report what they wrote.
+    files: ['scripts/**'],
+    rules: { 'no-console': 'off' },
   },
   {
     // The renderer is untrusted: it must not reach Node or Electron directly.

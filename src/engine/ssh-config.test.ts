@@ -17,7 +17,7 @@ describe('parseSshConfig', () => {
       hostName: '10.0.0.11',
       user: 'fallback',
       port: 2222,
-      identityFile: '/home/me/.ssh/id_web',
+      identityFile: join('/home/me', '.ssh', 'id_web'),
       proxyJump: '',
     });
     expect(alias?.hostName).toBe('10.0.0.11');
@@ -27,7 +27,7 @@ describe('parseSshConfig', () => {
       hostName: 'db.corp.internal',
       user: 'corp-admin',
       port: 22,
-      identityFile: '/home/me/.ssh/my keys/db key',
+      identityFile: join('/home/me', '.ssh', 'my keys', 'db key'),
       proxyJump: 'bastion.corp',
     });
     // `*.corp` sets ProxyJump bastion.corp before `ProxyJump none` in its own block.

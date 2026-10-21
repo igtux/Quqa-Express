@@ -855,3 +855,78 @@ body {
 .terminal-window {
   position: relative;
 }
+
+/* ----- About and first-run welcome ----------------------------------------- */
+
+.about {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.app-logo {
+  flex: none;
+}
+
+.about-name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.about-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin: 12px 0;
+  font-size: 0.85rem;
+}
+
+.about-facts dt {
+  color: var(--text-secondary);
+}
+
+.about-facts dd {
+  margin: 0;
+}
+
+.about-facts .link-btn {
+  font-size: 0.85rem;
+}
+
+.welcome-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.welcome-steps li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+}
+
+.welcome-steps li > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.welcome-steps strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.welcome-steps .system-btn {
+  flex: none;
+}

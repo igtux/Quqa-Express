@@ -74,3 +74,25 @@ const TYPES: Record<string, string> = {
 export function contentTypeOf(file: string): string {
   return TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream';
 }
+
+/** Longest link the app will hand to the system browser. */
+export const MAX_EXTERNAL_URL = 2048;
+
+/**
+ * The link to open in the system browser, or null: only `http(s)` URLs with
+ * a host, no user name or password in them, no control characters or spaces.
+ */
+export function externalUrl(text: unknown): string | null {
+  if (typeof text !== 'string' || text.length === 0 || text.length > MAX_EXTERNAL_URL) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u0020\u007f]/.test(text)) return null;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  if (!url.hostname || url.username || url.password) return null;
+  return url.href;
+}

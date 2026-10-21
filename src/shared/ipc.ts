@@ -834,6 +834,8 @@ export interface QuqaApi {
   /** Called with the tag of a notification the user clicked. */
   onNotificationClick(listener: (tag: string) => void): () => void;
   toggleFullScreen(): void;
+  /** Opens an http(s) link in the system browser; main drops anything else. */
+  openExternal(url: string): void;
   /**
    * Turns files the user dropped on the page into upload grants. Only real
    * dropped `File` objects have a path; main checks each one.

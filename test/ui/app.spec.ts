@@ -118,6 +118,7 @@ test('the page is served from app://, has no Node access, a strict CSP and only 
       'onEvent',
       'onNotificationClick',
       'onVaultChange',
+      'openExternal',
       'reconnect',
       'resize',
       'testHooks',
@@ -202,6 +203,11 @@ test('creates the vault with a master password and shows the hosts screen', asyn
   await form.getByLabel('Master password').fill(VAULT_PASSWORD);
   await form.getByLabel('Repeat the password').fill(VAULT_PASSWORD);
   await form.getByRole('button', { name: 'Create vault' }).click();
+  // First run offers imports from ~/.ssh; skipped here (smoke.spec.ts looks at it).
+  const welcome = page.getByRole('dialog', { name: 'Welcome to quqa-express' });
+  await expect(welcome).toBeVisible();
+  await welcome.getByRole('button', { name: 'Done' }).click();
+  await expect(welcome).toBeHidden();
   await expect(page.getByRole('region', { name: 'Hosts' })).toBeVisible();
   await expect(page.getByText('No hosts yet.')).toBeVisible();
 });

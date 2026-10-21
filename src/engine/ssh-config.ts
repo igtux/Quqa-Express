@@ -89,7 +89,7 @@ export function parseSshConfig(
 
   if (unknown.size > 0) {
     const names = [...unknown].slice(0, 12).join(', ');
-    note(`Ignored (not used by Quqa Express): ${names}${unknown.size > 12 ? ', …' : ''}`);
+    note(`Ignored (not used by quqa-express): ${names}${unknown.size > 12 ? ', …' : ''}`);
   }
 
   const hosts = aliases.map((alias) => resolve(alias, blocks, options));

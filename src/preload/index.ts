@@ -43,6 +43,7 @@ const api: QuqaApi = {
     };
   },
   toggleFullScreen: () => ipcRenderer.send(Channel.fullScreen, null),
+  openExternal: (url) => ipcRenderer.send(Channel.openExternal, url),
   grantFiles: async (files) => {
     // Only a real dropped file has a path; anything else gives '' or throws.
     const paths: string[] = [];

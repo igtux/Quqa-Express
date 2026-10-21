@@ -1,7 +1,8 @@
-# Packaging. Unsigned by design: Windows SmartScreen will warn on first run.
+# Packaging (docs/adr/0005-packaging-and-release.md). Unsigned by design:
+# Windows SmartScreen warns on first run ("More info" → "Run anyway").
 appId: io.github.igtux.quqa-express
-productName: Quqa Express
-copyright: Copyright © Quqa Express contributors
+productName: quqa-express
+copyright: Copyright © 2026 AURA and the quqa-express contributors
 directories:
   output: release/${version}
   buildResources: build
@@ -10,6 +11,10 @@ files:
   - package.json
   - '!**/*.map'
 asar: true
+# ssh2 talks to Pageant through this helper program; programs cannot start
+# from inside app.asar (the engine points spawn at the unpacked copy).
+asarUnpack:
+  - node_modules/ssh2/util/pagent.exe
 # ssh2's optional native add-ons are not built; it runs in pure JavaScript.
 npmRebuild: false
 nodeGypRebuild: false
@@ -27,23 +32,35 @@ electronFuses:
   onlyLoadAppFromAsar: true
   grantFileProtocolExtraPrivileges: false
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch: [x64]
     - target: portable
       arch: [x64]
-  # No code signing.
+  # No code signing; the version resource and icon are still written.
   signAndEditExecutable: true
   forceCodeSigning: false
-  artifactName: ${productName}-${version}-${arch}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 nsis:
+  # Per-user install into %LOCALAPPDATA%\Programs: no administrator rights.
   oneClick: false
   perMachine: false
+  allowElevation: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
-  artifactName: ${productName}-Setup-${version}-${arch}.${ext}
+  createStartMenuShortcut: true
+  shortcutName: quqa-express
+  uninstallDisplayName: quqa-express
+  # The vault stays unless the user says yes in the uninstaller (installer.nsh).
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  artifactName: ${name}-${version}-setup.${ext}
 portable:
-  artifactName: ${productName}-Portable-${version}-${arch}.${ext}
+  # Keeps its profile in "quqa-express-data" next to the .exe (src/main/index.ts).
+  artifactName: ${name}-${version}-portable.${ext}
 linux:
   target: [AppImage]
   category: System
