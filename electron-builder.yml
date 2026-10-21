@@ -11,6 +11,14 @@ files:
   - package.json
   - '!**/*.map'
 asar: true
+# Licences of the bundled fonts (THIRD_PARTY_NOTICES.md) next to app.asar.
+extraResources:
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: LICENSE
+    to: LICENSE
+  - from: licenses
+    to: licenses
 # ssh2 talks to Pageant through this helper program; programs cannot start
 # from inside app.asar (the engine points spawn at the unpacked copy).
 asarUnpack:

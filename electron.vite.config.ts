@@ -28,6 +28,9 @@ const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { versio
 
 export default defineConfig({
   main: {
+    // The update check compares against it (app.getVersion() is Electron's
+    // own version when the app runs unpackaged from out/).
+    define: { __APP_VERSION__: JSON.stringify(version) },
     build: {
       outDir: 'out/main',
       rollupOptions: {

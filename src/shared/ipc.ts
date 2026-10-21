@@ -557,6 +557,56 @@ export const SshConfigImported = obj({
 });
 export type SshConfigImported = Static<typeof SshConfigImported>;
 
+/* ----- App settings and updates (main, outside the vault) ------------------ */
+
+export const AppTheme = Type.Union([Type.Literal('glass'), Type.Literal('classic')]);
+export type AppTheme = Static<typeof AppTheme>;
+
+/** `settings.json` in the profile folder: nothing secret, needed before unlock. */
+export const AppSettings = obj({
+  theme: AppTheme,
+  /** Check GitHub for a newer release at start and every 6 hours (ADR 0006). */
+  autoUpdate: Type.Boolean(),
+  /** The window uses the OS's translucent material (Windows 11 acrylic). Read-only. */
+  material: Type.Boolean(),
+});
+export type AppSettings = Static<typeof AppSettings>;
+
+const VersionText = Type.String({
+  maxLength: 64,
+  pattern: '^\\d{1,6}\\.\\d{1,6}\\.\\d{1,6}(?:-[0-9A-Za-z.-]{1,40})?$',
+});
+
+export const UpdateState = obj({
+  current: VersionText,
+  autoUpdate: Type.Boolean(),
+  checking: Type.Boolean(),
+  /** Epoch ms of the last finished check. */
+  checkedAt: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  error: Type.Union([Type.String({ maxLength: 200 }), Type.Null()]),
+  available: Type.Union([
+    obj({
+      version: VersionText,
+      publishedAt: Type.String({ maxLength: 40 }),
+      /** Markdown from the release body, shown as text (never as HTML). */
+      notes: Type.String({ maxLength: 20_010 }),
+      page: Type.String({ maxLength: 512, pattern: '^https://github\\.com/' }),
+    }),
+    Type.Null(),
+  ]),
+  /** What "Update now" does: run the verified installer, or open the release page. */
+  method: Type.Union([Type.Literal('installer'), Type.Literal('page')]),
+  phase: Type.Union([
+    Type.Literal('idle'),
+    Type.Literal('downloading'),
+    Type.Literal('verifying'),
+    Type.Literal('starting'),
+  ]),
+  /** Download progress 0–1 while downloading. */
+  progress: Type.Union([Type.Number({ minimum: 0, maximum: 1 }), Type.Null()]),
+});
+export type UpdateState = Static<typeof UpdateState>;
+
 /* ----- UI state (saved in the vault, no secrets) ---------------------------- */
 
 const ThemeId = Type.String({ pattern: THEME_ID_PATTERN });
@@ -624,6 +674,27 @@ export const AppCalls = {
     result: VaultStatus,
   },
   'vault.updateSettings': { params: VaultSettings, result: VaultStatus },
+  /**
+   * "Forgot password? Start over": only while locked (or unreadable). The vault
+   * file and its backup move to `vault-backups/<time>/` in the profile folder.
+   */
+  'vault.reset': {
+    params: obj({ confirm: Type.Literal('DELETE') }),
+    result: obj({
+      backup: Type.Union([Type.String({ maxLength: 4096 }), Type.Null()]),
+      status: VaultStatus,
+    }),
+  },
+  'app.settings': { params: Empty, result: AppSettings },
+  'app.setSettings': {
+    params: obj({ theme: Type.Optional(AppTheme), autoUpdate: Type.Optional(Type.Boolean()) }),
+    result: AppSettings,
+  },
+  'updates.status': { params: Empty, result: UpdateState },
+  'updates.check': { params: Empty, result: UpdateState },
+  /** Downloads, verifies and runs the installer (installed builds), or opens the release page. */
+  'updates.install': { params: Empty, result: UpdateState },
+  'updates.skip': { params: obj({ version: VersionText }), result: UpdateState },
   'keys.list': { params: Empty, result: obj({ keys: Type.Array(KeyInfo) }) },
   'keys.generate': { params: obj({ label: Label }), result: KeyInfo },
   /** Pasted key text; sent once, sealed by the engine, never returned. */

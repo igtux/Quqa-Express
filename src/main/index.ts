@@ -7,6 +7,7 @@
  */
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { release as osRelease } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   app,
@@ -39,8 +40,11 @@ import {
   SessionMessage,
   TmuxMessage,
   type AppMethod,
+  type AppSettings,
+  type AppTheme,
   type SessionEvent,
 } from '../shared/ipc.js';
+import { SettingsFile } from './app-settings.js';
 import { EngineHost } from './engine-host.js';
 import { Grants } from './grants.js';
 import { hardenSessions } from './security.js';
@@ -52,8 +56,11 @@ import {
   isAppUrl,
   resolveAppPath,
 } from './urls.js';
+import { startInstaller, Updater } from './updater.js';
 import { VaultBroker } from './vault-broker.js';
 import { MIN_SIZE, placeWindow, readWindowState, writeWindowState } from './window-state.js';
+
+declare const __APP_VERSION__: string;
 
 const here = import.meta.dirname;
 /** What the preload sends for dropped files: their local paths, checked again by Grants. */
@@ -86,6 +93,12 @@ function adoptEarlyProfile() {
   }
 }
 
+/** Windows 11 22H2 and later draw acrylic behind a transparent window background. */
+const materialSupported =
+  process.platform === 'win32' && Number(osRelease().split('.')[2] ?? 0) >= 22621;
+const usesMaterial = (theme: AppTheme) => materialSupported && theme === 'glass';
+const SOLID_BACKGROUND = '#0a0a0f';
+
 // Chromium's renderer sandbox for every renderer, before the app is ready.
 app.enableSandbox();
 // Windows shows desktop notifications only for an app with this id (electron-builder.yml appId).
@@ -113,6 +126,30 @@ function start() {
   const vaultPath = join(app.getPath('userData'), 'vault.json');
   let broker: VaultBroker | null = null;
   const grants = new Grants();
+  const settings = new SettingsFile(join(app.getPath('userData'), 'settings.json'));
+  const appSettings = (): AppSettings => {
+    const { theme, autoUpdate } = settings.get();
+    return { theme, autoUpdate, material: usesMaterial(theme) };
+  };
+  const updater = new Updater({
+    settings,
+    current: __APP_VERSION__,
+    // The NSIS install updates itself; the portable exe and other builds open the page.
+    method: process.platform === 'win32' && app.isPackaged && !portableDir ? 'installer' : 'page',
+    openExternal: (url) => {
+      const safe = externalUrl(url);
+      if (safe) void shell.openExternal(safe).catch(() => undefined);
+    },
+    runInstaller: (path) => {
+      startInstaller(path);
+      setTimeout(() => app.quit(), 500);
+    },
+    // Tests never reach GitHub; they may hand in a releases list instead.
+    offline: testHooks,
+    ...(testHooks && process.env['QUQA_TEST_RELEASES']
+      ? { releasesFile: process.env['QUQA_TEST_RELEASES'] }
+      : {}),
+  });
 
   const engine = new EngineHost(join(here, 'engine.js'), {
     onEvent(event: SessionEvent) {
@@ -312,7 +349,9 @@ function start() {
       ...placed.bounds,
       minWidth: MIN_SIZE.width,
       minHeight: MIN_SIZE.height,
-      backgroundColor: '#0a0a0f',
+      // The glass theme on Windows 11: acrylic shows through the page's tinted background.
+      backgroundColor: usesMaterial(settings.get().theme) ? '#00000000' : SOLID_BACKGROUND,
+      ...(usesMaterial(settings.get().theme) && { backgroundMaterial: 'acrylic' as const }),
       title: 'quqa-express',
       show: false,
       autoHideMenuBar: true,
@@ -378,7 +417,21 @@ function start() {
         },
         grants,
         forceNoOsKeyStore: testHooks && process.env['QUQA_TEST_NO_OS_KEYSTORE'] === '1',
+        appSettings,
+        setAppSettings: (change) => {
+          const before = settings.get();
+          settings.update(change);
+          const theme = settings.get().theme;
+          if (materialSupported && window && theme !== before.theme) {
+            window.setBackgroundMaterial(usesMaterial(theme) ? 'acrylic' : 'none');
+            window.setBackgroundColor(usesMaterial(theme) ? '#00000000' : SOLID_BACKGROUND);
+          }
+          if (change.autoUpdate && !before.autoUpdate) void updater.check();
+          return appSettings();
+        },
+        updater,
       });
+      updater.start();
       broker.watchIdle();
       engine.start();
       createWindow();
@@ -395,5 +448,8 @@ function start() {
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
-  app.on('before-quit', () => engine.stop());
+  app.on('before-quit', () => {
+    updater.stop();
+    engine.stop();
+  });
 }

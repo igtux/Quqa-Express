@@ -56,6 +56,14 @@ jobs:
       - name: UI tests (Playwright drives the built app)
         if: runner.os == 'Linux'
         run: xvfb-run -a pnpm test:ui
+      # Screenshots of every screen in both app themes (test/ui/look.spec.ts).
+      - uses: actions/upload-artifact@v4
+        if: always() && runner.os == 'Linux'
+        with:
+          name: ui-screenshots-linux
+          path: ui-screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
 
   windows-build:
     name: Windows installer, portable build and smoke test
@@ -83,6 +91,14 @@ jobs:
         run: pnpm test:smoke
         env:
           QUQA_APP_EXECUTABLE: ${{ github.workspace }}\release\smoke\win-unpacked\quqa-express.exe
+      # Georgian text as Windows draws it (smoke-georgian-*.png).
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-screenshots-windows
+          path: ui-screenshots/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Build the installer and the portable exe
         run: pnpm exec electron-builder --win nsis portable --x64

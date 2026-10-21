@@ -16,9 +16,20 @@ docker compose -f docker/compose.yml run --rm dev pnpm install
 # Every change: lint + typecheck + unit and end-to-end SSH tests
 docker compose -f docker/compose.yml run --rm dev pnpm check
 
-# UI smoke test (Playwright drives the built Electron app under Xvfb)
-docker compose -f docker/compose.yml run --rm dev xvfb-run -a pnpm test:ui
+# UI tests (Playwright drives the built Electron app under Xvfb). Keep the
+# `sh -c`: xvfb-run as the container's PID 1 can miss Xvfb's ready signal
+# and wait forever.
+docker compose -f docker/compose.yml run --rm dev sh -c 'xvfb-run -a pnpm test:ui'
 ```
+
+`test/ui/look.spec.ts` screenshots every screen in both app themes (and
+Georgian in the terminal with the WebGL and the DOM renderer) into
+`ui-screenshots/` (git-ignored; CI uploads it as an artifact). Look at
+them after any UI change. It starts Electron with SwiftShader WebGL
+(`--ignore-gpu-blocklist --enable-unsafe-swiftshader`), because Xvfb has no
+GPU. The update badge is tested with a fake releases list
+(`QUQA_TEST_RELEASES`, honoured only with `QUQA_TEST_HOOKS=1`). Under test
+hooks main never contacts GitHub.
 
 The container runs as uid 1000, so files it writes into the checkout stay
 yours. `pnpm check` must pass before every commit; CI runs it on Ubuntu and
@@ -127,19 +138,27 @@ failing test run also writes one annotation listing every failed test
 (`scripts/ci-failures.mjs`), readable through the public API:
 `/repos/igtux/Quqa-Express/check-runs/<job id>/annotations`.
 
-To release, set the version in `package.json`, commit, then push an
-annotated tag:
+To release:
+
+1. Set the full version in `package.json`, suffix included (`0.1.0-beta.4`).
+2. Add its section to `CHANGELOG.md` (`## [0.1.0-beta.4] - <date>`).
+   `node scripts/changelog.mjs v0.1.0-beta.4` prints what the release body
+   and the app's update panel will show. A tag without a section fails.
+3. Commit, then push an annotated tag:
 
 ```sh
-git tag -a v0.1.0-beta.1 -m "quqa-express 0.1.0 beta 1"
-git push origin v0.1.0-beta.1
+git tag -a v0.1.0-beta.4 -m "quqa-express 0.1.0 beta 4"
+git push origin v0.1.0-beta.4
 ```
 
 `.github/workflows/release.yml` checks that the tag matches the version (a
 suffix such as `-beta.1` is allowed and makes a pre-release), runs
 `pnpm check` and the packaged smoke test on windows-latest, builds, and
-publishes the setup exe, the portable exe and `SHA256SUMS.txt` with notes on
-SmartScreen and checksums. It uses only `GITHUB_TOKEN`.
+publishes the setup exe, the portable exe and `SHA256SUMS.txt`. The notes
+start with the changelog section, followed by the SmartScreen and checksum
+notes. It uses only `GITHUB_TOKEN`. Installed apps find the release through
+the update check (ADR 0006). The installed build verifies the setup exe
+against `SHA256SUMS.txt` before it runs it, so both files must be attached.
 
 ## Layout
 
@@ -154,7 +173,8 @@ src/shared/    IPC contract: protocol.ts (no deps), ipc.ts (renderer ↔ main sc
 src/renderer/  React UI: hosts/ (hosts screen, forms, ssh config import),
                terminal/ (xterm session, workspace, dock model, themes), components/
 test/e2e/      engine against a real SSH server
-test/ui/       Playwright smoke test of the Electron app
+test/ui/       Playwright: smoke (also on the packaged Windows build), app (with SSH),
+               look (screenshots of both themes, Georgian, update panel)
 docker/        dev image, compose stack, test SSH server
 build/         icon (SVG source, .ico, .png) and the NSIS uninstaller hook
 scripts/       icons, SHA256SUMS.txt, CI failure summary

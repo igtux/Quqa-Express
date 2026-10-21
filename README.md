@@ -64,9 +64,12 @@ right-click it → Properties → tick **Unblock**.)
 
 **3. First start.** quqa-express creates an encrypted vault for your keys,
 passwords and trusted host keys, protected by your Windows account (DPAPI);
-you can add a master password. It then offers to import your hosts from
-`%USERPROFILE%\.ssh\config` (with their key files), your
-`known_hosts` and other keys. Nothing in your `.ssh` folder is changed.
+you can add a master password. Then add hosts, or use **Import from
+~/.ssh** on the hosts screen to bring over `%USERPROFILE%\.ssh\config`
+(with their key files), your `known_hosts` and other keys. Nothing in your
+`.ssh` folder is changed. If you forget the master password, **Forgot
+password? Start over** on the lock screen moves the old vault to a
+`vault-backups` folder and lets you create a new one.
 
 **Uninstall** from Settings → Apps. Your vault in `%APPDATA%\quqa-express`
 is kept unless you answer **Yes** when the uninstaller asks. The portable
@@ -75,8 +78,15 @@ default Windows protection that vault opens only for your Windows account,
 so to carry it to another PC create it with a master password and tick
 **Portable**.
 
-The app makes no network connections of its own: no telemetry, no update
-checks. The only connections are the SSH sessions and tunnels you open.
+**Updates.** At start and every 6 hours the app asks GitHub whether a newer
+release is out. If one is, a small badge in the top bar shows what's new.
+**Update now** downloads the installer, checks it against the release's
+`SHA256SUMS.txt` and runs it. The portable build opens the download page
+instead. Turn the check off in F1 → About.
+
+Apart from that update check, the app makes no network connections of its
+own and has no telemetry. The only other connections are the SSH sessions
+and tunnels you open.
 
 ## Build from source
 

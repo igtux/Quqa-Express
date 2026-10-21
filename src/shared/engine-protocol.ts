@@ -68,6 +68,15 @@ export const EngineCalls = {
     result: Empty,
   },
   'vault.lock': { params: Empty, result: Empty },
+  /**
+   * "Start over": a vault that is not unlocked is moved to
+   * `vault-backups/<timestamp>/` next to it and a new one can be created.
+   * `backup`: that folder (null: there was no vault file).
+   */
+  'vault.reset': {
+    params: Empty,
+    result: obj({ backup: Type.Union([FilePath, Type.Null()]) }),
+  },
   /** Re-wraps the data key (password set, changed or removed); `current` proves the old password. */
   'vault.rewrap': {
     params: obj({ current: Type.Optional(Secret), ...WrapParams }),

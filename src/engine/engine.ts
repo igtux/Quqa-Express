@@ -96,6 +96,7 @@ import {
   type HistoryAction,
 } from './tmux.js';
 import type { KdfParams } from './vault/crypto.js';
+import { moveVaultAside } from './vault/reset.js';
 import { DEFAULT_SETTINGS, Vault } from './vault/vault.js';
 
 // ssh2 is CommonJS: Node's ESM loader exposes only its default export.
@@ -366,16 +367,28 @@ export class Engine {
   private readonly handlers: Handlers = {
     'vault.open': async ({ path }) => {
       if (this.vault?.path === path) return {};
-      this.vault?.lock();
-      const vault = new Vault(path, this.kdf ? { kdf: this.kdf } : {});
-      await vault.load();
-      vault.onChange((state) => this.vaultChanged(state));
-      this.vault = vault;
-      const keys = new KeyStore(vault);
-      this.keys = keys;
-      this.hosts = new HostStore(vault, (keyId) => keys.has(keyId));
-      this.sshConfig = null;
+      await this.openVault(path);
       return {};
+    },
+    'vault.reset': async () => {
+      const vault = this.requireVault();
+      let unlocked = false;
+      try {
+        unlocked = vault.state === 'unlocked';
+      } catch {
+        // A damaged or newer file: exactly what starting over is for.
+      }
+      if (unlocked) throw new CallError('invalid_request', 'Lock the vault first');
+      vault.lock();
+      let backup: string | null;
+      try {
+        backup = await moveVaultAside(vault.path);
+      } catch {
+        throw new CallError('io', 'The vault file could not be moved aside');
+      }
+      await this.openVault(vault.path);
+      this.vaultChanged('absent');
+      return { backup };
     },
     'vault.status': async () => {
       const vault = this.requireVault();
@@ -831,6 +844,18 @@ export class Engine {
       imported++;
     }
     return { hosts: imported, keys: importedKeys, problems: problems.slice(0, 1000) };
+  }
+
+  private async openVault(path: string): Promise<void> {
+    this.vault?.lock();
+    const vault = new Vault(path, this.kdf ? { kdf: this.kdf } : {});
+    await vault.load();
+    vault.onChange((state) => this.vaultChanged(state));
+    this.vault = vault;
+    const keys = new KeyStore(vault);
+    this.keys = keys;
+    this.hosts = new HostStore(vault, (keyId) => keys.has(keyId));
+    this.sshConfig = null;
   }
 
   private requireVault(): Vault {

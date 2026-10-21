@@ -2,13 +2,15 @@
  * Start-up smoke test, also run on Windows CI against the packaged app
  * (QUQA_APP_EXECUTABLE, built with the inspect fuse on so Playwright can
  * attach): the window opens, the vault is created (with the OS key store
- * when there is one, which is DPAPI on Windows), the first-run welcome and
- * the hosts screen render, About shows the version, and after a restart the
- * vault opens again and the window comes back where it was.
+ * when there is one, which is DPAPI on Windows) and the app goes straight to
+ * the hosts screen, a host with a Georgian name renders in the bundled
+ * Georgian font (screenshot in ui-screenshots/), About shows the version and
+ * the update setting, after a restart the vault opens again and the window
+ * comes back where it was, and "Start over" moves the vault aside.
  *
  *   docker compose -f docker/compose.yml run --rm dev xvfb-run -a pnpm test:smoke
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -20,6 +22,7 @@ import {
 } from '@playwright/test';
 
 const VAULT_PASSWORD = 'smoke test master password';
+const GEORGIAN_HOST = 'ქართული სერვერი';
 const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string };
 
 let app: ElectronApplication | undefined;
@@ -65,7 +68,7 @@ test('the main window opens', async () => {
   expect(shown).toEqual({ visible: true, title: 'quqa-express' });
 });
 
-test('creates the vault and shows the first-run welcome and the hosts screen', async () => {
+test('creates the vault and goes straight to the hosts screen', async () => {
   const form = page.getByRole('form', { name: 'Create vault' });
   await expect(form).toBeVisible();
   // Without an OS key store (e.g. Linux without a keyring) a password is required.
@@ -76,15 +79,54 @@ test('creates the vault and shows the first-run welcome and the hosts screen', a
   }
   await form.getByRole('button', { name: 'Create vault' }).click();
 
-  const welcome = page.getByRole('dialog', { name: 'Welcome to quqa-express' });
-  await expect(welcome).toBeVisible();
-  await expect(welcome.getByRole('button', { name: 'Import hosts…' })).toBeEnabled();
-  await welcome.getByRole('button', { name: 'Done' }).click();
-  await expect(welcome).toBeHidden();
-
   await expect(page.getByRole('region', { name: 'Hosts' })).toBeVisible();
   await expect(page.getByText('No hosts yet.')).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   expect(existsSync(join(profile, 'vault.json'))).toBe(true);
+
+  // Importing from ~/.ssh is offered, not forced.
+  await page.getByRole('button', { name: 'Import from ~/.ssh' }).first().click();
+  const imports = page.getByRole('dialog', { name: 'Import from ~/.ssh' });
+  await expect(imports.getByRole('button', { name: 'Import hosts…' })).toBeEnabled();
+  await imports.getByRole('button', { name: 'Done' }).click();
+  await expect(imports).toBeHidden();
+});
+
+test('Georgian text renders in the bundled Georgian fonts', async () => {
+  await page.getByRole('button', { name: 'Add host' }).first().click();
+  const form = page.getByRole('dialog', { name: 'Add host' });
+  await form.getByLabel('Name').fill(GEORGIAN_HOST);
+  await form.getByLabel('Address').fill('192.0.2.10');
+  await form.getByLabel('User').fill('root');
+  await form.getByLabel('Notes').fill('გამარჯობა, მსოფლიო! ქართული ტექსტი');
+  await form.getByRole('button', { name: 'Add host' }).click();
+  await expect(form).toBeHidden();
+  const card = page.getByRole('listitem', { name: GEORGIAN_HOST });
+  await expect(card).toContainText(GEORGIAN_HOST);
+  const fonts = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return {
+      sans: document.fonts.check('16px "Quqa Georgian Sans"', 'ქ'),
+      mono: document.fonts.check('16px "BPG Courier"', 'ქ'),
+    };
+  });
+  expect(fonts).toEqual({ sans: true, mono: true });
+  mkdirSync('ui-screenshots', { recursive: true });
+  await page.screenshot({ path: join('ui-screenshots', 'smoke-georgian-hosts.png') });
+
+  // The terminal font samples and preview carry Georgian too.
+  await page.getByRole('button', { name: 'Look and notifications' }).click();
+  const look = page.getByRole('dialog', { name: 'Look and notifications' });
+  await expect(look).toContainText('გამარჯობა, მსოფლიო');
+  await page.screenshot({ path: join('ui-screenshots', 'smoke-georgian-look.png') });
+  await look.getByRole('button', { name: 'Cancel' }).click();
+
+  await card.getByRole('button', { name: `Delete ${GEORGIAN_HOST}` }).click();
+  await page
+    .getByRole('dialog', { name: `Delete ${GEORGIAN_HOST}?` })
+    .getByRole('button', { name: 'Delete' })
+    .click();
+  await expect(page.getByText('No hosts yet.')).toBeVisible();
 });
 
 test('About shows the version, licence and source', async () => {
@@ -96,6 +138,8 @@ test('About shows the version, licence and source', async () => {
   await expect(about.getByTestId('app-version')).toHaveText(`Version ${version}`);
   await expect(about).toContainText('Apache License 2.0');
   await expect(about).toContainText('github.com/igtux/Quqa-Express');
+  // On by default; tests never reach GitHub (main skips the check under test hooks).
+  await expect(about.getByLabel('Check for updates automatically')).toBeChecked();
   await about.getByRole('button', { name: 'Close' }).click();
   await expect(about).toBeHidden();
 });
@@ -125,4 +169,18 @@ test('after a restart the vault opens again and the window keeps its size', asyn
     return { width: bounds?.width, height: bounds?.height };
   });
   expect(size).toEqual({ width: 900, height: 600 });
+});
+
+test('"Start over" moves the vault aside and offers a new one', async () => {
+  await page.getByRole('button', { name: 'Lock', exact: true }).click();
+  const unlock = page.getByRole('form', { name: 'Unlock vault' });
+  await expect(unlock).toBeVisible();
+  await unlock.getByRole('button', { name: /Start over$/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Start over with a new vault?' });
+  await dialog.getByLabel(/to confirm/).fill('DELETE');
+  await dialog.getByRole('button', { name: 'Start over' }).click();
+  await expect(page.getByRole('form', { name: 'Create vault' })).toContainText('vault-backups');
+  expect(existsSync(join(profile, 'vault.json'))).toBe(false);
+  const [folder] = readdirSync(join(profile, 'vault-backups'));
+  expect(readdirSync(join(profile, 'vault-backups', folder as string))).toContain('vault.json');
 });

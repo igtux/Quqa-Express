@@ -1,11 +1,12 @@
 /**
  * Terminal look: the fixed ANSI palette, the 20 colour schemes, the 12 font
- * stacks (each led by BPG Courier so Georgian fills one cell when that font
- * is installed), the font-size ladder and zoom.
+ * stacks (each led by the bundled BPG Courier, which covers only Georgian, so
+ * a Georgian letter fills one cell whatever the Latin font), the font-size
+ * ladder and zoom.
  *
- * Ported from Jarvis NG (apps/web/src/terminal/themes.ts), same owner. Jarvis
- * bundles the web fonts; quqa-express is offline and does not fetch fonts, so
- * a stack falls back to the next installed font. The choices are saved in the
+ * Ported from Jarvis NG (apps/web/src/terminal/themes.ts), same owner. The
+ * app is offline: the Georgian fonts are bundled (styles/fonts.css); a Latin
+ * stack falls back to the next installed font. The choices are saved in the
  * vault with the rest of the UI state, not in renderer storage.
  */
 import type { ITheme } from '@xterm/xterm';
@@ -79,8 +80,26 @@ export function fontById(id: string): FontChoice {
   return FONTS.find((f) => f.id === id) ?? DEFAULT_FONT;
 }
 
+/** Bundled, Georgian only (styles/fonts.css). */
+export const GEORGIAN_MONO = 'BPG Courier';
+/** Bundled Noto Sans Georgian: Mtavruli capitals the Courier lacks. */
+export const GEORGIAN_SANS = 'Quqa Georgian Sans';
+
 export function fontFamily(font: FontChoice): string {
-  return `"BPG Courier", ${font.stack}`;
+  return `"${GEORGIAN_MONO}", ${font.stack}, "${GEORGIAN_SANS}"`;
+}
+
+/**
+ * Loads the bundled Georgian fonts before a terminal measures and caches
+ * glyphs: a unicode-range font otherwise loads only when the first Georgian
+ * letter is drawn, and WebGL would keep the fallback glyph in its atlas.
+ */
+export async function loadGeorgianFonts(): Promise<void> {
+  if (typeof document === 'undefined' || !('fonts' in document)) return;
+  await Promise.allSettled([
+    document.fonts.load(`16px "${GEORGIAN_MONO}"`, 'ა'),
+    document.fonts.load(`16px "${GEORGIAN_SANS}"`, 'აᲐ'),
+  ]);
 }
 
 /** The fixed 16-colour palette; schemes only change bg/fg/cursor. */

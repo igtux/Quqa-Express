@@ -48,6 +48,7 @@ const PATHS = {
   arrowUp: 'M12 19V5M5 12l7-7 7 7',
   home: 'M3 11l9-8 9 8M5 9.5V21h5v-6h4v6h5V9.5',
   tunnel: 'M4 20V10a8 8 0 0 1 16 0v10M8 20v-8a4 4 0 0 1 8 0v8M2 20h20',
+  update: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 16.5V8M8 11.5l4-4 4 4',
 } as const;
 
 export type IconName = keyof typeof PATHS;
@@ -77,7 +78,7 @@ export function Icon({
   );
 }
 
-/** The app icon (build/icon.svg), for the About dialog and the welcome screen. */
+/** The app icon (build/icon.svg), for the About dialog. */
 export function AppLogo({ size = 48 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 512 512" aria-hidden="true" className="app-logo">

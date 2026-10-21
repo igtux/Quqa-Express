@@ -355,6 +355,29 @@ instead of a zip.
   checksums; README install section matches.
 - **Port:** — (new).
 
+## 0.1.0-beta.4: owner feedback on beta.3
+
+**Status: done.** Design: ADR 0006.
+
+- Georgian: BPG Courier and Noto Sans Georgian are bundled with a
+  Georgian-only `unicode-range`. Every terminal stack starts with BPG Courier
+  and ends with Noto. The UI stacks start with Noto. The fonts load before
+  glyphs are cached and the WebGL atlas is redrawn when they arrive. The UI
+  test checks one cell per letter with the DOM renderer and screenshots both
+  renderers. Zoom keys also match by physical key. Licences are in
+  `THIRD_PARTY_NOTICES.md`.
+- No forced first-run import. The hosts screen's empty state has
+  **Add host** and **Import from ~/.ssh**.
+- Update check, on by default and opt-out in About:
+  - a badge and a panel with the notes rendered as safe Markdown,
+  - Update now (download, verify against SHA256SUMS.txt, run the installer;
+    the portable build opens the page), Later, and Skip this version,
+  - `CHANGELOG.md` feeds the release body.
+- Liquid glass, the default theme, with Classic selectable. Windows 11 uses
+  acrylic. Screenshots of every screen come from `test/ui/look.spec.ts`.
+- "Forgot password? Start over": the vault moves to
+  `vault-backups/<time>/`.
+
 ---
 
 ## After v1 (v1.x / later)
@@ -366,6 +389,6 @@ re-check on an address change, known_hosts write-back, sound packs, scrollback
 export, configurable shortcuts, per-host themes, "My sounds", host list
 export/import, RSA/ECDSA generation; later: macOS and Linux builds, multiple
 windows, proxies, FIDO2 keys, edit remote files
-locally, session logging, opt-in unsigned self-update check, SBOM and build
+locally, session logging, SBOM and build
 provenance attestations for releases, code signing, optional AI
 recap with the user's own API key (Jarvis ADR 0029, `term/summaries.ts`).

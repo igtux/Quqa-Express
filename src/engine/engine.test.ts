@@ -155,6 +155,36 @@ describe('Engine vault calls', () => {
     expect(states).toEqual(['unlocked', 'locked', 'unlocked']);
   });
 
+  it('starts over: moves a locked vault aside and offers a new one', async () => {
+    const { engine, events, dir } = await collect();
+    await engine.call('keys.generate', { label: 'old' });
+    await engine.call('keys.generate', { label: 'second save makes a .bak' });
+    await expect(engine.call('vault.reset', {})).rejects.toMatchObject({
+      code: 'invalid_request',
+    });
+    await engine.call('vault.lock', {});
+    const { backup } = await engine.call('vault.reset', {});
+    expect(backup).toMatch(/vault-backups[\\/]\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ$/);
+    const { readdir } = await import('node:fs/promises');
+    expect((await readdir(backup as string)).sort()).toEqual(['vault.json', 'vault.json.bak']);
+    expect((await readdir(dir)).sort()).toEqual(['vault-backups']);
+    expect(await engine.call('vault.status', {})).toMatchObject({ state: 'absent', mode: null });
+    expect(events.at(-1)).toEqual({ type: 'vault-state', state: 'absent' });
+    await engine.call('vault.create', { mode: 'password', password: 'a new start' });
+    expect((await engine.call('keys.list', {})).keys).toEqual([]);
+  });
+
+  it('starts over from a damaged vault file', async () => {
+    const { engine, dir } = await collect({ unlock: false });
+    await writeFile(join(dir, 'vault.json'), '{"format":"quqa-vault","version":99}');
+    await engine.call('vault.open', { path: join(dir, 'other.json') });
+    await engine.call('vault.open', { path: join(dir, 'vault.json') });
+    await expect(engine.call('vault.status', {})).rejects.toBeTruthy();
+    const { backup } = await engine.call('vault.reset', {});
+    expect(backup).not.toBeNull();
+    expect(await engine.call('vault.status', {})).toMatchObject({ state: 'absent' });
+  });
+
   it('imports known_hosts from a path and lists pins without key blobs', async () => {
     const { engine, dir } = await collect();
     const missing = await engine.call('hostKeys.importPath', { path: join(dir, 'nope') });

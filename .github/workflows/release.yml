@@ -3,7 +3,9 @@ name: Release
 # A tag such as v0.1.0 or v0.1.0-beta.1 builds the Windows installer and the
 # portable exe on windows-latest, smoke-tests the packaged app, and publishes
 # them with SHA256SUMS.txt as a GitHub release (a pre-release when the tag
-# has a suffix such as -beta.1). Unsigned by design (docs/adr/0005).
+# has a suffix such as -beta.1). Unsigned by design (docs/adr/0005). The
+# release body starts with the tag's section of CHANGELOG.md, which the
+# app's update panel shows (docs/adr/0006).
 on:
   push:
     tags: ['v*']
@@ -28,9 +30,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      - name: The tag matches package.json
+      - name: The tag matches package.json and CHANGELOG.md has its notes
         shell: bash
         run: |
+          node scripts/changelog.mjs "${GITHUB_REF_NAME}" > /dev/null
           version=$(node -p "require('./package.json').version")
           tag="${GITHUB_REF_NAME}"
           case "$tag" in
@@ -73,9 +76,14 @@ jobs:
           prerelease=""
           case "$tag" in *-*) prerelease="--prerelease" ;; esac
           {
-            echo "quqa-express $tag for Windows 10 and 11 (x64)."
+            # What's new, from CHANGELOG.md (the in-app update panel shows this part).
+            echo "## What's new in $tag"
+            echo
+            node scripts/changelog.mjs "$tag"
             echo
             echo "## Download"
+            echo
+            echo "quqa-express $tag for Windows 10 and 11 (x64)."
             echo
             echo "- \`quqa-express-$version-setup.exe\`: installer, for your user only (no administrator rights), with Start menu and desktop shortcuts. Uninstalling keeps your vault unless you ask for it to be removed."
             echo "- \`quqa-express-$version-portable.exe\`: no installation; keeps its data in a \`quqa-express-data\` folder next to the exe."

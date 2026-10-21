@@ -19,6 +19,7 @@ import type { EngineVaultStatus } from '../shared/engine-protocol.js';
 import {
   AppCalls,
   type AppMethod,
+  type AppSettings,
   type CallParams,
   type CallResult,
   type VaultMode,
@@ -27,6 +28,7 @@ import {
 } from '../shared/ipc.js';
 import type { EngineHost } from './engine-host.js';
 import type { Grants } from './grants.js';
+import type { Updater } from './updater.js';
 
 type Result = CallResult<unknown>;
 
@@ -46,6 +48,10 @@ export interface BrokerDeps {
   grants: Grants;
   /** Test hook: pretend the OS key store is missing. */
   forceNoOsKeyStore?: boolean;
+  /** The app theme and the update check (settings.json, not the vault). */
+  appSettings(): AppSettings;
+  setAppSettings(change: CallParams<'app.setSettings'>): AppSettings;
+  updater: Updater;
 }
 
 const usesOs = (mode: VaultMode) => mode !== 'password';
@@ -178,6 +184,32 @@ export class VaultBroker {
         );
         return updated.ok ? this.status() : updated;
       }
+      case 'vault.reset': {
+        const reset = await engine.call('vault.reset', {});
+        if (!reset.ok) return reset;
+        this.userLocked = false;
+        const status = await this.status();
+        if (!status.ok) return status;
+        return { ok: true, value: { backup: reset.value.backup, status: status.value } };
+      }
+      case 'app.settings':
+        return { ok: true, value: this.deps.appSettings() };
+      case 'app.setSettings':
+        return {
+          ok: true,
+          value: this.deps.setAppSettings(raw as CallParams<'app.setSettings'>),
+        };
+      case 'updates.status':
+        return { ok: true, value: this.deps.updater.state() };
+      case 'updates.check':
+        return { ok: true, value: await this.deps.updater.check() };
+      case 'updates.install':
+        return { ok: true, value: this.deps.updater.install() };
+      case 'updates.skip':
+        return {
+          ok: true,
+          value: this.deps.updater.skip((raw as CallParams<'updates.skip'>).version),
+        };
       case 'keys.list':
         return engine.call('keys.list', {});
       case 'keys.generate':

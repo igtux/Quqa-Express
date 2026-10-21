@@ -32,9 +32,11 @@ servers; these rules keep them safe. The design is in
    exec with every argument escaped by one helper; tmux and other remote
    commands are built only from validated identifiers.
 8. **No telemetry, no network beyond SSH.** No analytics, crash upload,
-   remote fonts, CDNs or update pings. The only sockets are the SSH
-   connections and forwards the user asked for. Opt-in exceptions (update
-   check, AI recap) are off by default and documented in an ADR.
+   remote fonts or CDNs. The only sockets are the SSH connections and
+   forwards the user asked for, plus one documented exception: the update
+   check (main reads this repository's GitHub releases; on by default, the
+   user can turn it off; ADR 0006). Any other exception (AI recap) is off by
+   default and needs its own ADR.
 9. **No secrets in code, logs or tests.** Test keys are generated in the
    test; logs redact anything that could be a secret.
 10. **Errors shown to users are deliberate.** Map engine errors to known

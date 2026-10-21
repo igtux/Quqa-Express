@@ -50,6 +50,14 @@ vault on an update or an uninstall by accident.
 - **Left out for now:** SBOM, provenance attestations, code signing,
   auto-update (an opt-in update check stays "later", AGENTS.md rule 8).
 
+## Addendum (2026-10-21, 0.1.0-beta.4)
+
+`package.json` now carries the pre-release suffix (`0.1.0-beta.4`), so file
+names include it and the update check can compare betas. A release's notes
+start with its `CHANGELOG.md` section, and a tag without one fails.
+`THIRD_PARTY_NOTICES.md`, `LICENSE` and `licenses/` ship in `resources/`.
+See [ADR 0006](0006-update-check-themes-georgian.md).
+
 ## Consequences
 
 - Users see a SmartScreen warning until the app has reputation or is

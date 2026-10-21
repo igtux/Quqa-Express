@@ -42,6 +42,7 @@ import {
   fontById,
   fontFamily,
   lineHeight,
+  loadGeorgianFonts,
   schemeById,
   xtermTheme,
 } from './themes.js';
@@ -267,6 +268,9 @@ export class TerminalSession {
   private wheelRest = 0;
   private lastError: { code: SshErrorCode; message: string } | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private webgl: WebglAddon | null = null;
+  /** A font finished loading: glyphs drawn with a fallback are drawn again. */
+  private readonly onFontsLoaded = () => this.redrawGlyphs();
 
   constructor(
     api: QuqaApi,
@@ -499,23 +503,39 @@ export class TerminalSession {
       this.term.open(this.element);
       try {
         const webgl = new WebglAddon();
-        webgl.onContextLoss(() => {
-          webgl.dispose();
-          this.update({ renderer: 'dom' });
-        });
+        webgl.onContextLoss(() => this.useDomRenderer());
         this.term.loadAddon(webgl);
+        this.webgl = webgl;
         this.update({ renderer: 'webgl' });
       } catch {
         // No WebGL2: xterm keeps its DOM renderer.
       }
       this.resizeObserver = new ResizeObserver(() => this.scheduleFit(50));
       this.resizeObserver.observe(this.element);
+      // Georgian comes from bundled unicode-range fonts; once they are in,
+      // the WebGL atlas must drop any glyph it cached from a fallback font.
+      document.fonts.addEventListener('loadingdone', this.onFontsLoaded);
+      void loadGeorgianFonts().then(this.onFontsLoaded);
     }
     this.fitNow();
   }
 
   focus(): void {
     if (this.opened) this.term.focus();
+  }
+
+  /** xterm's DOM renderer (WebGL context lost; the UI test also checks it). */
+  useDomRenderer(): void {
+    this.webgl?.dispose();
+    this.webgl = null;
+    this.update({ renderer: 'dom' });
+  }
+
+  private redrawGlyphs() {
+    if (!this.opened || this.disposed) return;
+    this.term.clearTextureAtlas();
+    this.term.refresh(0, this.term.rows - 1);
+    this.scheduleFit(30);
   }
 
   /** On screen in the focused window (the user sees it). */
@@ -1094,6 +1114,7 @@ export class TerminalSession {
     if (this.sessionId) this.api.disconnect(this.sessionId);
     this.unlisten?.();
     this.resizeObserver?.disconnect();
+    document.fonts.removeEventListener('loadingdone', this.onFontsLoaded);
     this.term.dispose();
     this.element.remove();
     this.listeners.clear();

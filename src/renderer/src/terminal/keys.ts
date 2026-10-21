@@ -17,6 +17,18 @@ export function digitKey(event: KeyboardEvent): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/**
+ * Ctrl+= / Ctrl+- / Ctrl+0 by physical key as well: on some layouts these
+ * keys type other characters (the French layout's 0 key is "à").
+ */
+export function zoomKey(event: KeyboardEvent): 1 | -1 | 'reset' | null {
+  const { key, code } = event;
+  if (key === '=' || key === '+' || code === 'Equal' || code === 'NumpadAdd') return 1;
+  if (key === '-' || code === 'Minus' || code === 'NumpadSubtract') return -1;
+  if (key === '0' || code === 'Digit0' || code === 'Numpad0') return 'reset';
+  return null;
+}
+
 /** Focus is in a text field or the terminal (where plain Ctrl+K belongs to the shell). */
 export function isTextField(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;

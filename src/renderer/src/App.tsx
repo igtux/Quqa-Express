@@ -22,11 +22,11 @@ import { ShortcutsDialog } from './components/ShortcutsDialog.js';
 import { FavoritesBar, TabStrip } from './components/TabStrip.js';
 import { TerminalView } from './components/TerminalView.js';
 import { ThemeDialog } from './components/ThemeDialog.js';
-import { SetupScreen, UnlockScreen } from './components/VaultScreens.js';
-import { WelcomeDialog } from './components/WelcomeDialog.js';
+import { ResetVaultDialog, SetupScreen, UnlockScreen } from './components/VaultScreens.js';
 import { HostsPanel } from './hosts/HostsPanel.js';
+import { updates } from './updates.js';
 import { SessionEvents } from './terminal/connection.js';
-import { digitKey, isLetterKey, isTextField } from './terminal/keys.js';
+import { digitKey, isLetterKey, isTextField, zoomKey } from './terminal/keys.js';
 import { MAX_FAVORITES_SHOWN, Workspace } from './terminal/workspace.js';
 
 const api = window.quqa;
@@ -53,8 +53,9 @@ export function App() {
   const [theme, setTheme] = useState(false);
   const [shortcuts, setShortcuts] = useState(false);
   const [about, setAbout] = useState(false);
-  /** Right after the vault was created: offer to import from ~/.ssh. */
-  const [welcome, setWelcome] = useState(false);
+  /** After "Start over": where the old vault was moved. */
+  const [movedTo, setMovedTo] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
   useSyncExternalStore(workspace.subscribe, workspace.getVersion);
 
   const refresh = useCallback(() => {
@@ -90,6 +91,9 @@ export function App() {
     refresh();
     return api.onVaultChange(refresh);
   }, [refresh]);
+
+  // The update check runs in main; the top bar shows its result.
+  useEffect(() => updates.start(), []);
 
   // Files dropped outside a drop target must not open in the window.
   useEffect(() => {
@@ -127,6 +131,7 @@ export function App() {
       tmux: () => workspace.activeSession()?.getSnapshot().tmux ?? null,
       tabs: () => workspace.tabs.length,
       panes: () => workspace.currentTab()?.panes.length ?? 0,
+      useDomRenderer: () => workspace.activeSession()?.useDomRenderer(),
     };
   }, []);
 
@@ -187,19 +192,10 @@ export function App() {
         }
       }
       if (mod && !event.altKey && !event.shiftKey) {
-        if (event.key === '=' || event.key === '+') {
+        const zoom = zoomKey(event);
+        if (zoom !== null) {
           handled();
-          workspace.zoom(1);
-          return;
-        }
-        if (event.key === '-') {
-          handled();
-          workspace.zoom(-1);
-          return;
-        }
-        if (event.key === '0') {
-          handled();
-          workspace.zoom('reset');
+          workspace.zoom(zoom);
           return;
         }
       }
@@ -246,9 +242,25 @@ export function App() {
     return (
       <div className="connect-screen">
         {failure ? (
-          <p className="system-error" role="alert">
-            {failure}
-          </p>
+          <div className="vault-failure">
+            <p className="system-error" role="alert">
+              {failure}
+            </p>
+            <button type="button" className="link-btn" onClick={() => setResetting(true)}>
+              Start over with a new vault…
+            </button>
+            {resetting && (
+              <ResetVaultDialog
+                onClose={() => setResetting(false)}
+                onReset={(next, backup) => {
+                  setResetting(false);
+                  setFailure(null);
+                  setMovedTo(backup);
+                  setStatus(next);
+                }}
+              />
+            )}
+          </div>
         ) : (
           <p className="system-hint">Opening the vault…</p>
         )}
@@ -260,15 +272,21 @@ export function App() {
     return (
       <SetupScreen
         status={status}
+        movedTo={movedTo}
         onDone={(next) => {
+          setMovedTo(null);
           setStatus(next);
-          setWelcome(true);
         }}
       />
     );
   }
+  const reset = (next: VaultStatus, backup: string | null) => {
+    workspace.closeAll();
+    setMovedTo(backup);
+    setStatus(next);
+  };
   if (!unlocked && workspace.terms.size === 0) {
-    return <UnlockScreen status={status} onDone={setStatus} />;
+    return <UnlockScreen status={status} onDone={setStatus} onReset={reset} />;
   }
 
   const lock = () => {
@@ -377,17 +395,6 @@ export function App() {
           />
         )}
         {about && <AboutDialog onClose={() => setAbout(false)} />}
-        {welcome && (
-          <WelcomeDialog
-            onClose={() => setWelcome(false)}
-            onImported={loadLists}
-            onShowKeys={() => {
-              setWelcome(false);
-              workspace.showHome();
-              setSection('keys');
-            }}
-          />
-        )}
         {workspace.files && <FileBrowser workspace={workspace} view={workspace.files} />}
         {workspace.probes.map((probe, index) => (
           <ProbeDialogs key={index} probe={probe} onClose={() => workspace.closeProbe(probe)} />
@@ -398,7 +405,7 @@ export function App() {
       </div>
       {!unlocked && (
         <div className="vault-overlay">
-          <UnlockScreen status={status} onDone={setStatus} />
+          <UnlockScreen status={status} onDone={setStatus} onReset={reset} />
         </div>
       )}
     </>

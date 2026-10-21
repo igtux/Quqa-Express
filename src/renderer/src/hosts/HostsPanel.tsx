@@ -28,7 +28,7 @@ import {
   toLatency,
   type Latency,
 } from './hostModel.js';
-import { SshConfigImport } from './SshConfigImport.js';
+import { SshImportDialog } from './SshImportDialog.js';
 
 /** Survives switching tabs. */
 const latencyCache = new Map<string, Latency>();
@@ -157,7 +157,7 @@ export function HostsPanel({
             className="system-btn ghost small"
             onClick={() => setImporting(true)}
           >
-            <Icon name="import" /> Import ~/.ssh/config
+            <Icon name="import" /> Import from ~/.ssh
           </button>
           <button
             type="button"
@@ -204,12 +204,31 @@ export function HostsPanel({
       )}
 
       {hosts.length === 0 ? (
-        <div className="panel-empty hosts-empty">
-          <p>No hosts yet.</p>
-          <p>
-            Add one, import your <code>~/.ssh/config</code>, or use Quick connect (Ctrl+Shift+O) for
-            a one-off connection.
+        <div className="hosts-empty">
+          <span className="hosts-empty-icon" aria-hidden="true">
+            <Icon name="terminal" />
+          </span>
+          <p className="hosts-empty-title">No hosts yet.</p>
+          <p className="system-hint">
+            Add a server to connect to, or bring over the hosts and keys you already use with
+            OpenSSH. Quick connect (Ctrl+Shift+O) opens a one-off session.
           </p>
+          <div className="hosts-empty-actions">
+            <button
+              type="button"
+              className="system-btn primary inline"
+              onClick={() => setEditing({ mode: 'add', initial: EMPTY_HOST })}
+            >
+              <Icon name="plus" /> Add host
+            </button>
+            <button
+              type="button"
+              className="system-btn ghost inline"
+              onClick={() => setImporting(true)}
+            >
+              <Icon name="import" /> Import from ~/.ssh
+            </button>
+          </div>
         </div>
       ) : visible.length === 0 ? (
         <p className="panel-empty">No host matches.</p>
@@ -315,7 +334,16 @@ export function HostsPanel({
           }}
         />
       )}
-      {importing && <SshConfigImport onClose={() => setImporting(false)} onImported={onChange} />}
+      {importing && (
+        <SshImportDialog
+          onClose={() => setImporting(false)}
+          onImported={onChange}
+          onShowKeys={() => {
+            setImporting(false);
+            onManageKeys();
+          }}
+        />
+      )}
       {found && <HostSessions host={found} workspace={workspace} onClose={() => setFound(null)} />}
       {installing && (
         <InstallKey

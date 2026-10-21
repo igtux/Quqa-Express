@@ -224,6 +224,15 @@ with `quqa-<32 hex>` names; the hosts screen measures latency with a TCP
 connect to each saved SSH port; desktop notifications are shown by main.
 See [ADR 0003](0003-hosts-and-sessions.md).
 
+## Addendum (2026-10-21, 0.1.0-beta.4)
+
+The update check (§8) is **on by default** at the owner's request, with an
+opt-out in About. It is the one network call besides SSH, made by main and
+not by the renderer. It reads this repository's GitHub releases at start and
+every 6 hours. The installed build downloads and runs a new installer only
+after the user clicks "Update now" and the SHA-256 matches the release's
+`SHA256SUMS.txt`. See [ADR 0006](0006-update-check-themes-georgian.md).
+
 ## Addendum (2026-10-21, Phase 4)
 
 Files, transfers, port forwards (local, remote, SOCKS), jump hosts and the

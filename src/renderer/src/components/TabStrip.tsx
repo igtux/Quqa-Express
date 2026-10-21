@@ -14,6 +14,7 @@ import { MAX_FAVORITES_SHOWN } from '../terminal/workspace.js';
 import { summarize } from '../terminal/dockModel.js';
 import { Icon } from './icons.js';
 import { STATUS_CLASS } from './TerminalView.js';
+import { UpdateBadge } from './UpdatePanel.js';
 
 export function TabStrip({
   workspace,
@@ -94,6 +95,7 @@ export function TabStrip({
         </button>
       </div>
       <div className="app-bar-actions">
+        <UpdateBadge />
         <button
           type="button"
           className={`app-bar-btn dock-btn${workspace.dockOpen ? ' on' : ''}${attention ? ' attention' : ''}`}
@@ -118,8 +120,8 @@ export function TabStrip({
         <button
           type="button"
           className="app-bar-btn"
-          title="Terminal look and notifications"
-          aria-label="Terminal look and notifications"
+          title="Look and notifications"
+          aria-label="Look and notifications"
           onClick={onTheme}
         >
           <Icon name="palette" />

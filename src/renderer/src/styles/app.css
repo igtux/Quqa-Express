@@ -16,8 +16,10 @@
   --success: #22c55e;
   --warning: #f59e0b;
   --error: #ef4444;
-  --font-body: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
-  --font-mono-ui: 'Cascadia Mono', Consolas, 'SF Mono', monospace;
+  /* The Georgian faces are bundled and cover only Georgian (fonts.css). */
+  --font-body: 'Quqa Georgian Sans', 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono-ui:
+    'BPG Courier', 'Cascadia Mono', Consolas, 'SF Mono', monospace, 'Quqa Georgian Sans';
   color-scheme: dark;
 }
 
@@ -856,7 +858,7 @@ body {
   position: relative;
 }
 
-/* ----- About and first-run welcome ----------------------------------------- */
+/* ----- About and the ~/.ssh import ------------------------------------------ */
 
 .about {
   display: flex;
@@ -929,4 +931,318 @@ body {
 
 .welcome-steps .system-btn {
   flex: none;
+}
+
+/* ----- Update check, app theme, starting over ------------------------------ */
+.system-hint.block {
+  margin-top: 2px;
+}
+
+.update-badge {
+  color: #5eead4;
+}
+
+.update-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2dd4bf;
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
+.update-badge.busy svg {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.update-panel {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.update-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-title svg {
+  width: 18px;
+  height: 18px;
+  color: #5eead4;
+}
+
+.update-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.update-head .system-hint {
+  margin-top: 0;
+}
+
+.update-version {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.update-notes {
+  max-height: 42vh;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--bg-tertiary);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.update-progress progress {
+  width: 100%;
+  height: 6px;
+  accent-color: #2dd4bf;
+}
+
+.markdown {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.markdown > * + * {
+  margin-top: 8px;
+}
+
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.markdown h4 {
+  font-size: 0.92rem;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 20px;
+}
+
+.markdown li + li {
+  margin-top: 3px;
+}
+
+.markdown code {
+  font-family: var(--font-mono-ui);
+  font-size: 0.78rem;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.markdown pre {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  overflow: auto;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: none;
+}
+
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--bg-tertiary);
+}
+
+.md-link {
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-confirm-url {
+  font-family: var(--font-mono-ui);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.about-updates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--bg-tertiary);
+}
+
+.about-updates .system-check {
+  align-items: flex-start;
+}
+
+.about-update-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.about-update-row .system-hint {
+  margin-top: 0;
+}
+
+.app-theme-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.app-theme-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--bg-tertiary);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-theme-choice.selected {
+  border-color: var(--accent);
+}
+
+.app-theme-swatch {
+  position: relative;
+  flex: none;
+  width: 52px;
+  height: 36px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.app-theme-choice.glass .app-theme-swatch {
+  background:
+    radial-gradient(circle at 15% 10%, rgba(99, 102, 241, 0.8), transparent 60%),
+    radial-gradient(circle at 95% 100%, rgba(20, 184, 166, 0.7), transparent 60%), #0c1022;
+}
+
+.app-theme-choice.classic .app-theme-swatch {
+  background: #0a0a0f;
+}
+
+.app-theme-swatch span {
+  position: absolute;
+  border-radius: 4px;
+}
+
+.app-theme-swatch span:nth-child(1) {
+  inset: 0 0 auto;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.app-theme-swatch span:nth-child(2) {
+  left: 8px;
+  right: 8px;
+  top: 13px;
+  bottom: 6px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.app-theme-choice.classic .app-theme-swatch span:nth-child(2) {
+  background: #12121a;
+  border-color: #1a1a24;
+}
+
+.app-theme-swatch span:nth-child(3) {
+  right: 12px;
+  bottom: 10px;
+  width: 14px;
+  height: 5px;
+  background: linear-gradient(90deg, #4f46e5, #0f766e);
+}
+
+.app-theme-choice.classic .app-theme-swatch span:nth-child(3) {
+  background: #6366f1;
+}
+
+.app-theme-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-theme-text .system-hint {
+  margin-top: 2px;
+}
+
+.app-theme-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.vault-forgot {
+  display: block;
+  margin: 14px auto 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.vault-forgot:hover {
+  color: var(--text-primary);
+}
+
+.vault-moved {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  background: rgba(45, 212, 191, 0.1);
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  overflow-wrap: anywhere;
+}
+
+.vault-moved code,
+.reset-list + .system-hint code {
+  font-family: var(--font-mono-ui);
+  font-size: 0.74rem;
+}
+
+.vault-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.reset-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.82rem;
+  line-height: 1.6;
 }

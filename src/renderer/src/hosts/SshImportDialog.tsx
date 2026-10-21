@@ -1,16 +1,15 @@
 /**
- * First run, right after the vault was created: offers to bring over what
- * the user already has in ~/.ssh (%USERPROFILE%\.ssh on Windows): hosts
- * from the ssh config (with their key files), trusted host keys from
- * known_hosts, and other keys. Every step is optional; main reads the files.
+ * "Import from ~/.ssh" (the hosts screen): brings over what the user already
+ * has in ~/.ssh (%USERPROFILE%\.ssh on Windows): hosts from the ssh config
+ * (with their key files), trusted host keys from known_hosts, and other keys.
+ * Every step is optional; main reads the files. Never shown unasked.
  */
 import { useState } from 'react';
 import { call, messageOf } from '../api.js';
-import { SshConfigImport } from '../hosts/SshConfigImport.js';
-import { Dialog } from './Dialog.js';
-import { AppLogo } from './icons.js';
+import { Dialog } from '../components/Dialog.js';
+import { SshConfigImport } from './SshConfigImport.js';
 
-export function WelcomeDialog({
+export function SshImportDialog({
   onClose,
   onImported,
   onShowKeys,
@@ -57,14 +56,10 @@ export function WelcomeDialog({
   };
 
   return (
-    <Dialog title="Welcome to quqa-express" onClose={onClose} cancelLabel="Done" wide>
-      <div className="about">
-        <AppLogo size={44} />
-        <p className="system-hint">
-          Your vault is ready. Bring over what you already use with OpenSSH, or skip this and add
-          hosts yourself. Nothing is changed in your .ssh folder.
-        </p>
-      </div>
+    <Dialog title="Import from ~/.ssh" onClose={onClose} cancelLabel="Done" wide>
+      <p className="system-hint">
+        Bring over what you already use with OpenSSH. Nothing is changed in your .ssh folder.
+      </p>
       <ul className="welcome-steps">
         <li>
           <div>

@@ -1,15 +1,21 @@
 /**
- * Terminal Theme: 20 colour schemes, 12 fonts, a live preview; Apply restyles
+ * Look: the app theme (Liquid glass or Classic), and for the terminal 20 colour schemes, 12 fonts, a live preview; Apply restyles
  * every open terminal (hosts with their own look keep it). Also the
  * notification switches and "re-open tabs at start".
  *
  * Ported from Jarvis NG (apps/web/src/terminal/ThemeModal.tsx), same owner.
  */
 import { useState } from 'react';
-import type { UiState } from '../../../shared/ipc.js';
+import type { AppTheme, UiState } from '../../../shared/ipc.js';
+import { currentAppTheme, setAppTheme } from '../appTheme.js';
 import { playChime } from '../terminal/chime.js';
 import { FONTS, SCHEMES, fontById, fontFamily, schemeById } from '../terminal/themes.js';
 import { Dialog } from './Dialog.js';
+
+const APP_THEMES: { id: AppTheme; name: string; hint: string }[] = [
+  { id: 'glass', name: 'Liquid glass', hint: 'Frosted panels, indigo to teal' },
+  { id: 'classic', name: 'Classic', hint: 'The solid Jarvis look' },
+];
 
 export function ThemeDialog({
   ui,
@@ -25,21 +31,46 @@ export function ThemeDialog({
   const [notifications, setNotifications] = useState(ui.notifications);
   const [sound, setSound] = useState(ui.sound);
   const [restoreTabs, setRestoreTabs] = useState(ui.restoreTabs);
+  const [appTheme, setTheme] = useState<AppTheme>(currentAppTheme);
   const current = schemeById(scheme);
   const family = fontFamily(fontById(font));
 
   return (
     <Dialog
-      title="Terminal Theme"
+      title="Look and notifications"
       wide
       className="theme-dialog"
       onClose={onClose}
       submitLabel="Apply"
       onSubmit={() => {
         onApply({ scheme, font, notifications, sound, restoreTabs });
+        if (appTheme !== currentAppTheme()) void setAppTheme(appTheme).catch(() => undefined);
         onClose();
       }}
     >
+      <span className="terminal-theme-label">App theme</span>
+      <div className="app-theme-choices" role="radiogroup" aria-label="App theme">
+        {APP_THEMES.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="radio"
+            aria-checked={t.id === appTheme}
+            className={`app-theme-choice ${t.id}${t.id === appTheme ? ' selected' : ''}`}
+            onClick={() => setTheme(t.id)}
+          >
+            <span className="app-theme-swatch" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="app-theme-text">
+              <span className="app-theme-name">{t.name}</span>
+              <span className="system-hint">{t.hint}</span>
+            </span>
+          </button>
+        ))}
+      </div>
       <span className="terminal-theme-label">Colour scheme</span>
       <div className="terminal-theme-schemes" role="radiogroup" aria-label="Colour scheme">
         {SCHEMES.map((s) => (
@@ -94,6 +125,11 @@ export function ThemeDialog({
         <div>
           -rw-r--r-- 1 user user 1234 Jan 15 10:28 <span className="preview-file">README.md</span>
         </div>
+        <div>
+          <span className="preview-prompt">user@host</span>:
+          <span className="preview-path">~/projects</span>$ echo &quot;გამარჯობა, მსოფლიო&quot;
+        </div>
+        <div>გამარჯობა, მსოფლიო</div>
         <div>
           <span className="preview-prompt">user@host</span>:
           <span className="preview-path">~/projects</span>${' '}

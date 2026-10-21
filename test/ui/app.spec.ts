@@ -203,12 +203,9 @@ test('creates the vault with a master password and shows the hosts screen', asyn
   await form.getByLabel('Master password').fill(VAULT_PASSWORD);
   await form.getByLabel('Repeat the password').fill(VAULT_PASSWORD);
   await form.getByRole('button', { name: 'Create vault' }).click();
-  // First run offers imports from ~/.ssh; skipped here (smoke.spec.ts looks at it).
-  const welcome = page.getByRole('dialog', { name: 'Welcome to quqa-express' });
-  await expect(welcome).toBeVisible();
-  await welcome.getByRole('button', { name: 'Done' }).click();
-  await expect(welcome).toBeHidden();
+  // Straight to the app: no first-run import screen.
   await expect(page.getByRole('region', { name: 'Hosts' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByText('No hosts yet.')).toBeVisible();
 });
 
@@ -223,7 +220,7 @@ test('generates a key and shows only public data', async () => {
 });
 
 test('adds, validates, searches, duplicates and deletes hosts', async () => {
-  await page.getByRole('button', { name: 'Add host' }).click();
+  await page.getByRole('button', { name: 'Add host' }).first().click();
   const form = page.getByRole('dialog', { name: 'Add host' });
   await form.getByLabel('Name').fill(HOST_NAME);
   await form.getByLabel('Address').fill('bad address');

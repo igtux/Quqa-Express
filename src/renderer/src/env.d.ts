@@ -14,6 +14,8 @@ declare global {
       tmux(): string | null;
       tabs(): number;
       panes(): number;
+      /** Switch the active terminal to xterm's DOM renderer. */
+      useDomRenderer(): void;
     };
   }
 }
