@@ -201,7 +201,10 @@ describe('the helper script', () => {
       ].sort(),
     );
     expect(SWAP_SCRIPT.match(/Test-Hash \$/g)).toHaveLength(2);
-    expect(SWAP_SCRIPT).toContain('Get-FileHash -LiteralPath');
+    // Only .NET calls: cmdlets from modules break under a PowerShell 7 PSModulePath.
+    expect(SWAP_SCRIPT).not.toMatch(
+      /Get-FileHash|Get-Date|Start-Sleep|New-Object|Move-Item|Remove-Item/,
+    );
   });
 });
 

@@ -163,7 +163,8 @@ export async function cleanUpdates(updates: string): Promise<void> {
 
 /**
  * The helper. Windows PowerShell 5.1 (on every Windows 10 and 11), ASCII only,
- * literal .NET file calls (no wildcard expansion of paths). It reads all its
+ * literal .NET calls only (no wildcard expansion of paths, and no cmdlets from
+ * modules, which a PowerShell 7 PSModulePath can break). It reads all its
  * values from the environment and clears them before it starts the app.
  * It returns (SWAP_COMMAND exits with) 0 updated, 2 checksum, 3 old
  * previous.exe, 4 moving the old exe, 5 placing the new exe, 6 the new exe did
@@ -188,7 +189,7 @@ export const SWAP_SCRIPT = [
   '',
   'function Write-Log([string]$message) {',
   '  if (-not $log) { return }',
-  "  try { [IO.File]::AppendAllText($log, ((Get-Date).ToString('o') + ' ' + $message + [Environment]::NewLine)) } catch { }",
+  "  try { [IO.File]::AppendAllText($log, ([DateTime]::Now.ToString('o') + ' ' + $message + [Environment]::NewLine)) } catch { }",
   '}',
   '',
   'function Wait-Exit([string]$id) {',
@@ -201,7 +202,7 @@ export const SWAP_SCRIPT = [
   '  for ($i = 1; $i -le 60; $i++) {',
   '    try { & $action; return $true } catch {',
   "      if ($i -eq 60) { Write-Log ($what + ' failed: ' + $_.Exception.Message) }",
-  '      Start-Sleep -Milliseconds 500',
+  '      [Threading.Thread]::Sleep(500)',
   '    }',
   '  }',
   '  return $false',
@@ -209,14 +210,18 @@ export const SWAP_SCRIPT = [
   '',
   'function Test-Hash([string]$path) {',
   "  if ($expected -notmatch '^[0-9a-f]{64}$') { return $false }",
-  '  try { $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() } catch { return $false }',
+  '  try {',
+  '    $stream = [IO.File]::OpenRead($path)',
+  '    try { $bytes = [Security.Cryptography.SHA256]::Create().ComputeHash($stream) } finally { $stream.Dispose() }',
+  "    $actual = ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()",
+  '  } catch { return $false }',
   '  return $actual -eq $expected',
   '}',
   '',
   'function Start-App {',
   '  if ($noStart) { return $true }',
   '  try {',
-  '    $info = New-Object Diagnostics.ProcessStartInfo',
+  '    $info = [Diagnostics.ProcessStartInfo]::new()',
   '    $info.FileName = $target',
   '    $info.WorkingDirectory = [IO.Path]::GetDirectoryName($target)',
   '    $info.UseShellExecute = $false',
@@ -288,7 +293,8 @@ export interface SwapLaunch {
 }
 
 /** Variables never handed on to the helper (and so to the new app). */
-const DROPPED_ENV = /^(ELECTRON_|PORTABLE_EXECUTABLE_|QUQA_TEST_|QUQA_UPDATE_|NODE_OPTIONS$)/i;
+const DROPPED_ENV =
+  /^(ELECTRON_|PORTABLE_EXECUTABLE_|QUQA_TEST_|QUQA_UPDATE_|NODE_OPTIONS$|PSModulePath$)/i;
 
 /** What to start, with which environment. Pure: validates everything, spawns nothing. */
 export function swapLaunch(plan: SwapPlan, env: NodeJS.ProcessEnv): SwapLaunch {
@@ -360,6 +366,7 @@ export async function startSwapHelper(launch: SwapLaunch, cwd: string): Promise<
     const child = spawn(launch.command, launch.args, {
       cwd,
       env: launch.env,
+      detached: true,
       stdio: 'ignore',
       windowsHide: true,
     });
