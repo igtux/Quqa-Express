@@ -74,6 +74,8 @@ jobs:
       # Smoke test of the packaged app: same app.asar and fuses as the release,
       # except the inspect fuse, which Playwright needs to attach.
       - name: Package for the smoke test
+        # bash: PowerShell would split "-c.electronFuses…=true" at the dot.
+        shell: bash
         run: pnpm exec electron-builder --win dir --x64 -c.electronFuses.enableNodeCliInspectArguments=true -c.directories.output=release/smoke
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
