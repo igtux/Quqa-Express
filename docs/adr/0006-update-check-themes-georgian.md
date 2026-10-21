@@ -176,7 +176,12 @@ long as the app runs, and a running exe cannot be overwritten.
   The phase becomes `ready`: **Restart to update** or **Discard download**.
 - **Restart.** Main hashes the file once more, writes the helper script
   `updates\apply-update.ps1` (a constant text) and starts Windows PowerShell
-  5.1 by its full `System32` path, detached and hidden, then quits. The
+  5.1 by its full `System32` path with a hidden console, then quits. It is
+  not started `detached`: Node gives a detached child no console
+  (DETACHED_PROCESS), and PowerShell 5.1 then exits 0 without running
+  anything; a plain child outlives the app on Windows (tested). The script
+  returns its result code and the command line exits with it, because 5.1
+  does not pass `exit` out of a script block run by `-Command`. The
   command line is a constant too: `-Command` runs
   `[scriptblock]::Create([IO.File]::ReadAllText($env:QUQA_UPDATE_SCRIPT))`.
   Every value (exe path, download, `previous.exe`, SHA-256, log, the app's

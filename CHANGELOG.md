@@ -6,8 +6,8 @@ start of its GitHub release notes and of what the in-app update panel shows
 
 ## [0.1.0-beta.7] - 2026-10-21
 
-The 0.1.0-beta.6 tag was never published: its Windows test of the update
-helper found that Windows PowerShell 5.1 lost the helper's result codes.
+The 0.1.0-beta.6 tag was never published: its Windows test showed that
+Windows PowerShell 5.1 did not run the update helper the way it was started.
 This release has everything planned for beta.6.
 
 ### Added

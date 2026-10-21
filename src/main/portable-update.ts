@@ -348,8 +348,11 @@ export async function writeSwapScript(launch: SwapLaunch): Promise<void> {
 }
 
 /**
- * Writes the script and starts the helper on its own (it outlives the app,
- * which quits next). Resolves once Windows has started it.
+ * Writes the script and starts the helper, which outlives the app (it quits
+ * next). Not `detached`: Node starts a detached child with DETACHED_PROCESS
+ * (no console), and Windows PowerShell 5.1 then exits 0 without running
+ * anything. A plain child gets its own hidden console, and Windows does not
+ * end it when the app exits (test/windows/portable-swap.test.ts checks both).
  */
 export async function startSwapHelper(launch: SwapLaunch, cwd: string): Promise<ChildProcess> {
   await writeSwapScript(launch);
@@ -357,7 +360,6 @@ export async function startSwapHelper(launch: SwapLaunch, cwd: string): Promise<
     const child = spawn(launch.command, launch.args, {
       cwd,
       env: launch.env,
-      detached: true,
       stdio: 'ignore',
       windowsHide: true,
     });

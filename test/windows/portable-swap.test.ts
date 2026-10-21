@@ -88,16 +88,46 @@ describe.skipIf(!windows)('portable swap helper on Windows', () => {
     running.push(stub);
     const started = Date.now();
 
-    const code = await runHelper(newHash, app.pid as number, stub.pid as number, false);
+    // Started the way main does, from a parent that exits at once (the app
+    // quits right after): the helper must carry on without it.
+    const launch = swapLaunch(
+      { target, download, sha256: newHash, appPid: app.pid as number, stubPid: stub.pid as number },
+      process.env,
+    );
+    await writeSwapScript(launch);
+    const parent = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        [
+          "import { spawn } from 'node:child_process';",
+          'const l = JSON.parse(process.env.QUQA_TEST_LAUNCH);',
+          "const c = spawn(l.command, l.args, { env: l.env, cwd: l.cwd, stdio: 'ignore', windowsHide: true });",
+          "c.once('spawn', () => process.exit(0));",
+        ].join('\n'),
+      ],
+      {
+        stdio: 'ignore',
+        env: {
+          ...process.env,
+          QUQA_TEST_LAUNCH: JSON.stringify({ ...launch, cwd: target.updates }),
+        },
+      },
+    );
+    expect(await exited(parent)).toBe(0);
+    for (let i = 0; i < 120 && !log().includes('updated;'); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    expect(code, log()).toBe(0);
+    expect(log()).toContain('updated; starting the new version');
     // The helper waited for the running exe before moving its file.
     expect(Date.now() - started).toBeGreaterThan(2500);
     expect(await sha256File(target.exe)).toBe(newHash);
     expect(await sha256File(target.previous)).toBe(oldHash);
     expect(existsSync(download)).toBe(false);
-    expect(log()).toContain('updated; starting the new version');
-  });
+  }, 120_000);
 
   it.skipIf(!process.env['QUQA_TEST_PORTABLE_EXE'])('swaps in the built portable exe', async () => {
     copyFileSync(process.env['QUQA_TEST_PORTABLE_EXE'] as string, download);
@@ -112,48 +142,6 @@ describe.skipIf(!windows)('portable swap helper on Windows', () => {
     expect(await sha256File(target.exe)).toBe(newHash);
     expect(await sha256File(target.previous)).toBe(oldHash);
     expect(existsSync(download)).toBe(false);
-  });
-
-  it('diagnostic: the same command with its output captured', async () => {
-    copyFileSync(join(system32, 'HOSTNAME.EXE'), download);
-    const launch = swapLaunch(
-      {
-        target,
-        download,
-        sha256: '0'.repeat(64),
-        appPid: process.pid + 1_000_000,
-        stubPid: null,
-        noStart: true,
-      },
-      process.env,
-    );
-    await writeSwapScript(launch);
-    const run = (args: string[], detached: boolean) =>
-      new Promise<string>((resolve) => {
-        const child = spawn(launch.command, args, {
-          env: launch.env,
-          cwd: target.updates,
-          detached,
-          windowsHide: true,
-        });
-        let out = '';
-        child.stdout?.on('data', (d: Buffer) => (out += d.toString()));
-        child.stderr?.on('data', (d: Buffer) => (out += d.toString()));
-        child.on('error', (e) => resolve(`spawn error ${e.message}`));
-        child.on('exit', (code) => resolve(`code=${code} out=${out.slice(0, 600)}`));
-      });
-    const piped = await run(launch.args, false);
-    const pipedDetached = await run(launch.args, true);
-    const simple = await run(['-NoProfile', '-Command', 'exit 7'], false);
-    const echo = await run(
-      [
-        '-NoProfile',
-        '-Command',
-        'Write-Output $env:QUQA_UPDATE_SCRIPT; Write-Output $PSVersionTable.PSVersion',
-      ],
-      false,
-    );
-    expect({ piped, pipedDetached, simple, echo, log: log() }).toEqual({});
   });
 
   it('changes nothing when the download does not match the checksum', async () => {
