@@ -34,6 +34,20 @@ const PATHS = {
   arrowDown: 'M12 5v14M5 12l7 7 7-7',
   activity: 'M22 12h-4l-3 9L9 3l-3 9H2',
   bolt: 'M13 2L3 14h9l-1 8 10-12h-9z',
+  folder: 'M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-3H5a2 2 0 0 0-2 2z',
+  folderPlus:
+    'M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-3H5a2 2 0 0 0-2 2zM12 11v6M9 14h6',
+  file: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6',
+  image: 'M3 5h18v14H3zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 19',
+  code: 'M16 18l6-6-6-6M8 6l-6 6 6 6',
+  archive: 'M3 4h18v4H3zM5 8v12h14V8M10 12h4',
+  link: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
+  upload: 'M12 21V9M7 14l5-5 5 5M5 3h14',
+  download: 'M12 3v12M7 10l5 5 5-5M5 21h14',
+  arrowLeft: 'M19 12H5M12 19l-7-7 7-7',
+  arrowUp: 'M12 19V5M5 12l7-7 7 7',
+  home: 'M3 11l9-8 9 8M5 9.5V21h5v-6h4v6h5V9.5',
+  tunnel: 'M4 20V10a8 8 0 0 1 16 0v10M8 20v-8a4 4 0 0 1 8 0v8M2 20h20',
 } as const;
 
 export type IconName = keyof typeof PATHS;

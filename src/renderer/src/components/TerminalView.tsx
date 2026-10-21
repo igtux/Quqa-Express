@@ -6,11 +6,19 @@
  * Ported from Jarvis NG (apps/web/src/terminal/TerminalModal.tsx: header
  * controls, split view, pane headers, Live button), same owner.
  */
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type DragEvent,
+} from 'react';
 import type { ConnState, TerminalSession } from '../terminal/connection.js';
 import type { Tab, Workspace } from '../terminal/workspace.js';
 import { ClipboardDialog } from './ClipboardDialog.js';
 import { CredentialDialog } from './CredentialDialog.js';
+import { ForwardDialog } from './Forwards.js';
 import { HostKeyChangedScreen } from './HostKeyChanged.js';
 import { HostKeyDialog } from './HostKeyDialog.js';
 import { Icon, type IconName } from './icons.js';
@@ -142,6 +150,7 @@ function Header({
 }) {
   const snapshot = useSnapshot(session);
   const [, rerender] = useState(0);
+  const [forwarding, setForwarding] = useState(false);
   const name = workspace.nameOf(session);
   const hostName = workspace.hostNameOf(session);
   const idle =
@@ -230,6 +239,17 @@ function Header({
           />
         )}
         <HeaderButton
+          icon="folder"
+          label="Files on this host (SFTP)"
+          onClick={() => workspace.openFilesForTerminal(session.tag)}
+        />
+        <HeaderButton
+          icon="tunnel"
+          label="Port forwarding over this connection"
+          className="optional-1"
+          onClick={() => setForwarding(true)}
+        />
+        <HeaderButton
           icon="search"
           label="Search the scrollback (Ctrl+Shift+F)"
           pressed={searching}
@@ -282,6 +302,14 @@ function Header({
           onClick={() => workspace.closeTab(tab.id)}
         />
       </div>
+      {forwarding && (
+        <ForwardDialog
+          workspace={workspace}
+          target={{ kind: 'terminal', tag: session.tag }}
+          title={name}
+          onClose={() => setForwarding(false)}
+        />
+      )}
     </div>
   );
 }
@@ -309,6 +337,9 @@ function Pane({
 }) {
   const container = useRef<HTMLDivElement>(null);
   const snapshot = useSnapshot(session);
+  const [dropping, setDropping] = useState(false);
+  const dragDepth = useRef(0);
+  const filesDragged = (event: DragEvent) => event.dataTransfer.types.includes('Files');
 
   useLayoutEffect(() => {
     const parent = container.current;
@@ -339,6 +370,30 @@ function Pane({
       data-testid="terminal-pane"
       onMouseDown={onActivate}
       onFocusCapture={onActivate}
+      // Files dropped on a terminal upload to its folder (Jarvis 01b §8.3).
+      onDragEnter={(event) => {
+        if (!filesDragged(event)) return;
+        event.preventDefault();
+        dragDepth.current++;
+        setDropping(true);
+      }}
+      onDragOver={(event) => {
+        if (!filesDragged(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={() => {
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDropping(false);
+      }}
+      onDrop={(event) => {
+        if (!filesDragged(event)) return;
+        event.preventDefault();
+        dragDepth.current = 0;
+        setDropping(false);
+        onActivate();
+        void workspace.uploadDropped(session, [...event.dataTransfer.files]);
+      }}
     >
       <div className="terminal-pane-header">
         <span className="terminal-pane-title">
@@ -371,6 +426,14 @@ function Pane({
           >
             <Icon name="arrowDown" /> Live{snapshot.historyUnread ? ' · new output' : ''}
           </button>
+        )}
+        {dropping && (
+          <div className="terminal-drop-overlay" data-testid="drop-overlay">
+            <Icon name="upload" />
+            <span>
+              Drop to upload to {workspace.folderOf(session) ?? 'the host’s upload folder'}
+            </span>
+          </div>
         )}
         {snapshot.notice && (
           <div className="terminal-notice" role="status">
@@ -424,7 +487,8 @@ function Pane({
       {visible && snapshot.clipboardRequest !== null && (
         <ClipboardDialog
           text={snapshot.clipboardRequest}
-          onAnswer={(allow) => session.answerClipboard(allow)}
+          canRemember={session.hostId !== null}
+          onAnswer={(allow, remember) => session.answerClipboard(allow, remember)}
         />
       )}
     </div>

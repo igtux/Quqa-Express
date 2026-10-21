@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { AppCalls, type HostInput } from '../shared/ipc.js';
 import { Engine } from './engine.js';
 import { DEFAULT_UI } from './hosts.js';
+import { ed25519Pair } from '../../test/keypair.js';
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -39,6 +40,11 @@ const input: HostInput = {
   proxyJump: '',
   scheme: '',
   font: '',
+  agentForward: false,
+  fileRoots: [],
+  uploadDir: '',
+  osc52: 'ask',
+  forwards: [],
 };
 
 const valid = (host: unknown) => Value.Check(AppCalls['hosts.save'].params, host);
@@ -167,8 +173,7 @@ describe('~/.ssh/config import', () => {
   it('previews entries, imports the chosen ones and their keys once', async () => {
     const { engine, dir } = await unlocked();
     const keyFile = join(dir, 'id_test');
-    const { utils } = (await import('ssh2')).default;
-    await writeFile(keyFile, utils.generateKeyPairSync('ed25519').private);
+    await writeFile(keyFile, ed25519Pair().private);
     const config = join(dir, 'config');
     await writeFile(
       config,

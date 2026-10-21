@@ -6,9 +6,12 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { HostInfo, KeyInfo, PinInfo, VaultStatus } from '../../shared/ipc.js';
 import { call, messageOf } from './api.js';
+import { FileBrowser } from './components/FileBrowser.js';
+import { ForwardsPanel } from './components/Forwards.js';
 import { HostKeysPanel } from './components/HostKeysPanel.js';
 import { Icon } from './components/icons.js';
 import { KeysPanel } from './components/KeysPanel.js';
+import { NoticeIsland } from './components/NoticeIsland.js';
 import { ProbeDialogs } from './components/ProbeDialogs.js';
 import { QuickConnect } from './components/QuickConnect.js';
 import { SecurityPanel } from './components/SecurityPanel.js';
@@ -28,9 +31,10 @@ const api = window.quqa;
 const events = new SessionEvents(api);
 const workspace = new Workspace(api, events);
 
-type Section = 'hosts' | 'keys' | 'pins' | 'security';
+type Section = 'hosts' | 'tunnels' | 'keys' | 'pins' | 'security';
 const SECTIONS: { id: Section; label: string }[] = [
   { id: 'hosts', label: 'Hosts' },
+  { id: 'tunnels', label: 'Tunnels' },
   { id: 'keys', label: 'Keys' },
   { id: 'pins', label: 'Host keys' },
   { id: 'security', label: 'Security' },
@@ -81,6 +85,19 @@ export function App() {
     refresh();
     return api.onVaultChange(refresh);
   }, [refresh]);
+
+  // Files dropped outside a drop target must not open in the window.
+  useEffect(() => {
+    const stop = (event: DragEvent) => {
+      if (event.dataTransfer?.types.includes('Files')) event.preventDefault();
+    };
+    window.addEventListener('dragover', stop);
+    window.addEventListener('drop', stop);
+    return () => {
+      window.removeEventListener('dragover', stop);
+      window.removeEventListener('drop', stop);
+    };
+  }, []);
 
   const unlocked = status?.state === 'unlocked';
   useEffect(() => {
@@ -290,6 +307,9 @@ export function App() {
                       onQuickConnect={() => setQuickConnect(true)}
                     />
                   )}
+                  {section === 'tunnels' && (
+                    <ForwardsPanel workspace={workspace} hosts={workspace.hosts} />
+                  )}
                   {section === 'keys' && <KeysPanel keys={keys} onChange={loadLists} />}
                   {section === 'pins' && (
                     <HostKeysPanel pins={pins.pins} hashed={pins.hashed} onChange={loadLists} />
@@ -306,6 +326,7 @@ export function App() {
                 visible={tab.id === workspace.activeTab}
               />
             ))}
+            {!workspace.files && <NoticeIsland notices={workspace.notices} />}
           </main>
           {workspace.dockOpen && <SessionsDock workspace={workspace} />}
         </div>
@@ -332,8 +353,12 @@ export function App() {
           />
         )}
         {shortcuts && <ShortcutsDialog onClose={() => setShortcuts(false)} />}
+        {workspace.files && <FileBrowser workspace={workspace} view={workspace.files} />}
         {workspace.probes.map((probe, index) => (
           <ProbeDialogs key={index} probe={probe} onClose={() => workspace.closeProbe(probe)} />
+        ))}
+        {[...workspace.links.entries()].map(([hostId, link]) => (
+          <ProbeDialogs key={hostId} probe={link} onClose={() => workspace.releaseLink(hostId)} />
         ))}
       </div>
       {!unlocked && (

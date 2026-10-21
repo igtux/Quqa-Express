@@ -44,6 +44,11 @@ const host = (tmux: boolean): HostInput => ({
   proxyJump: '',
   scheme: '',
   font: '',
+  agentForward: false,
+  fileRoots: [],
+  uploadDir: '',
+  osc52: 'ask',
+  forwards: [],
 });
 
 const tmuxName = () => `quqa-${randomBytes(16).toString('hex')}`;

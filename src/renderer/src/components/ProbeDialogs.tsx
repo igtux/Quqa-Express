@@ -1,11 +1,11 @@
-/** Host-key and credential prompts of a one-shot "list sessions" login (HostProbe). */
+/** Host-key and credential prompts of a login without a terminal (HostProbe, HostLink). */
 import { useSyncExternalStore } from 'react';
-import type { HostProbe } from '../terminal/connection.js';
+import type { PromptSource } from '../terminal/link.js';
 import { CredentialDialog } from './CredentialDialog.js';
 import { HostKeyChangedScreen } from './HostKeyChanged.js';
 import { HostKeyDialog } from './HostKeyDialog.js';
 
-export function ProbeDialogs({ probe, onClose }: { probe: HostProbe; onClose(): void }) {
+export function ProbeDialogs({ probe, onClose }: { probe: PromptSource; onClose(): void }) {
   const snapshot = useSyncExternalStore(probe.subscribe, probe.getSnapshot);
   return (
     <>

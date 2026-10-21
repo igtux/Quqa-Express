@@ -70,7 +70,22 @@ export const KeyAuth = Type.Object(
   { additionalProperties: false },
 );
 
-export const Auth = Type.Union([PasswordAuth, KeyAuth]);
+/** Where the keys of an SSH agent come from (ADR 0004). */
+export const AgentSource = Type.Union([
+  /** Windows: the OpenSSH agent pipe; macOS and Linux: SSH_AUTH_SOCK. */
+  Type.Literal('system'),
+  /** Windows only: PuTTY's Pageant. */
+  Type.Literal('pageant'),
+]);
+export type AgentSource = Static<typeof AgentSource>;
+
+/** Log in with the keys of the user's SSH agent (the engine never sees them). */
+export const AgentAuth = Type.Object(
+  { kind: Type.Literal('agent'), agent: AgentSource },
+  { additionalProperties: false },
+);
+
+export const Auth = Type.Union([PasswordAuth, KeyAuth, AgentAuth]);
 export type Auth = Static<typeof Auth>;
 
 /** An ad-hoc connection (Quick Connect): address, user and login method given here. */
@@ -100,6 +115,8 @@ export const HostAction = Type.Union([
   ),
   Type.Object({ type: Type.Literal('list') }, { additionalProperties: false }),
   Type.Object({ type: Type.Literal('end'), session: TmuxName }, { additionalProperties: false }),
+  /** Log in and keep the connection, with no shell: the file browser, tunnels, key install. */
+  Type.Object({ type: Type.Literal('hold') }, { additionalProperties: false }),
 ]);
 export type HostAction = Static<typeof HostAction>;
 
@@ -284,6 +301,171 @@ const Empty = Type.Object({}, { additionalProperties: false });
 const obj = <P extends Record<string, TSchema>>(properties: P) =>
   Type.Object(properties, { additionalProperties: false });
 
+/* ----- Remote files, transfers and port forwards ---------------------------- */
+
+/** An absolute remote path (POSIX style; Windows OpenSSH uses `/C:/…`). */
+export const RemotePath = Type.String({ minLength: 1, maxLength: 4096, pattern: '^/[^\\u0000]*$' });
+/** A name for something new (folder, rename target): one printable path component. */
+export const NewName = Type.String({
+  minLength: 1,
+  maxLength: 255,
+  pattern: '^(?!\\.{1,2}$)[^/\\u0000-\\u001f\\u007f]+$',
+});
+export const TRANSFER_ID_PATTERN = '^x[0-9]{1,9}$';
+export const FORWARD_ID_PATTERN = '^w[0-9]{1,9}$';
+export const SAVED_FORWARD_ID_PATTERN = '^f_[0-9a-f]{8}$';
+/** Upload grants (files the user chose or dropped), handed out by main. */
+export const GRANT_PATTERN = '^g[0-9a-f]{24}$';
+export const MAX_FILE_ROOTS = 8;
+export const MAX_SAVED_FORWARDS = 16;
+const MAX_LISTED = 10_000;
+
+export const FileEntry = Type.Object(
+  {
+    name: Type.String({ maxLength: 1024 }),
+    path: Type.String({ maxLength: 8192 }),
+    type: Type.Union([
+      Type.Literal('file'),
+      Type.Literal('directory'),
+      Type.Literal('symlink'),
+      Type.Literal('other'),
+    ]),
+    size: Type.Number({ minimum: 0 }),
+    modifiedAt: Type.String({ maxLength: 40 }),
+    /** Permission bits, e.g. 0o644. */
+    mode: Type.Integer({ minimum: 0, maximum: 0o7777 }),
+  },
+  { additionalProperties: false },
+);
+export type FileEntry = Static<typeof FileEntry>;
+
+export const FileListing = Type.Object(
+  {
+    path: Type.String({ maxLength: 8192 }),
+    /** The login's home folder (where `~` points). */
+    home: Type.String({ maxLength: 8192 }),
+    /** The folders this host's files are kept under (`/`: anywhere). */
+    roots: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: MAX_FILE_ROOTS }),
+    entries: Type.Array(FileEntry, { maxItems: MAX_LISTED }),
+  },
+  { additionalProperties: false },
+);
+export type FileListing = Static<typeof FileListing>;
+
+export const TransferInfo = Type.Object(
+  {
+    id: Type.String({ pattern: TRANSFER_ID_PATTERN }),
+    sessionId: SessionId,
+    direction: Type.Union([Type.Literal('upload'), Type.Literal('download')]),
+    name: Type.String({ maxLength: 1024 }),
+    remotePath: Type.String({ maxLength: 8192 }),
+    bytes: Type.Number({ minimum: 0 }),
+    total: Type.Number({ minimum: 0 }),
+    state: Type.Union([
+      Type.Literal('running'),
+      Type.Literal('interrupted'),
+      Type.Literal('done'),
+      Type.Literal('failed'),
+      Type.Literal('cancelled'),
+    ]),
+    error: Type.String({ maxLength: 300 }),
+  },
+  { additionalProperties: false },
+);
+export type TransferInfo = Static<typeof TransferInfo>;
+
+/** A file the user picked or dropped, by grant (main keeps its local path). */
+export const UploadGrant = Type.Object(
+  {
+    token: Type.String({ pattern: GRANT_PATTERN }),
+    name: Type.String({ maxLength: 255 }),
+    size: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+export type UploadGrant = Static<typeof UploadGrant>;
+
+export const ForwardKind = Type.Union([
+  /** -L: a port here reaches an address seen from the server. */
+  Type.Literal('local'),
+  /** -R: a port on the server reaches an address seen from here. */
+  Type.Literal('remote'),
+  /** -D: a SOCKS5 proxy here whose connections leave from the server. */
+  Type.Literal('dynamic'),
+]);
+
+/** What a forward does. Binding anything but loopback needs `allowPublic` (a confirm). */
+export const ForwardSpec = Type.Object(
+  {
+    kind: ForwardKind,
+    bindAddress: Host,
+    bindPort: Port,
+    /** Empty for dynamic forwards. */
+    destHost: Type.Union([Host, Type.Literal('')]),
+    /** 0 for dynamic forwards. */
+    destPort: Type.Integer({ minimum: 0, maximum: 65535 }),
+    allowPublic: Type.Boolean(),
+  },
+  { additionalProperties: false },
+);
+export type ForwardSpec = Static<typeof ForwardSpec>;
+
+/** A forward saved with a host; `auto` starts it whenever a session to the host connects. */
+export const SavedForward = Type.Object(
+  {
+    id: Type.String({ pattern: SAVED_FORWARD_ID_PATTERN }),
+    ...ForwardSpec.properties,
+    auto: Type.Boolean(),
+    label: ShortText(64),
+  },
+  { additionalProperties: false },
+);
+export type SavedForward = Static<typeof SavedForward>;
+
+export const ForwardInfo = Type.Object(
+  {
+    id: Type.String({ pattern: FORWARD_ID_PATTERN }),
+    sessionId: SessionId,
+    hostId: Type.Union([HostId, Type.Null()]),
+    savedId: Type.Union([Type.String({ pattern: SAVED_FORWARD_ID_PATTERN }), Type.Null()]),
+    kind: ForwardKind,
+    bindAddress: Type.String({ maxLength: 253 }),
+    bindPort: Type.Integer({ minimum: 0, maximum: 65535 }),
+    destHost: Type.String({ maxLength: 253 }),
+    destPort: Type.Integer({ minimum: 0, maximum: 65535 }),
+    state: Type.Union([
+      Type.Literal('starting'),
+      Type.Literal('listening'),
+      Type.Literal('paused'),
+      Type.Literal('failed'),
+    ]),
+    error: Type.String({ maxLength: 300 }),
+    connections: Type.Integer({ minimum: 0 }),
+    bytesIn: Type.Number({ minimum: 0 }),
+    bytesOut: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+export type ForwardInfo = Static<typeof ForwardInfo>;
+
+export const AgentKey = Type.Object(
+  {
+    algorithm: Type.String({ maxLength: 64 }),
+    fingerprint: Type.String({ maxLength: 128 }),
+    comment: Type.String({ maxLength: 200 }),
+  },
+  { additionalProperties: false },
+);
+export type AgentKey = Static<typeof AgentKey>;
+
+/** What a remote program may do with the clipboard (OSC 52 writes; reads are always denied). */
+export const Osc52Policy = Type.Union([
+  Type.Literal('ask'),
+  Type.Literal('allow'),
+  Type.Literal('deny'),
+]);
+export type Osc52Policy = Static<typeof Osc52Policy>;
+
 /* ----- Saved hosts ---------------------------------------------------------- */
 
 export const TAG_PATTERN = '^[^\\s,\\u0000-\\u001f\\u007f]{1,32}$';
@@ -305,10 +487,20 @@ export const HostInput = obj({
   color: Type.String({ pattern: '^(#[0-9a-f]{6})?$' }),
   /** Resumable sessions: run terminals inside tmux when the host has it. */
   tmux: Type.Boolean(),
-  /** Phase 4: another saved host to jump through (stored, not used yet). */
+  /** Another saved host to connect through (its own login and host key); chains allowed. */
   jumpHostId: Type.Union([HostId, Type.Null()]),
-  /** Phase 4: `ProxyJump` as read from ~/.ssh/config, kept for later. */
+  /** `ProxyJump` as read from ~/.ssh/config; used when no jump host is chosen. */
   proxyJump: ShortText(255),
+  /** Forward the SSH agent to this host (off by default; the host can then use your keys). */
+  agentForward: Type.Boolean(),
+  /** File browser and uploads stay under these folders; empty: anywhere. */
+  fileRoots: Type.Array(RemotePath, { maxItems: MAX_FILE_ROOTS }),
+  /** Where pasted images and dropped files go: absolute, `~/…`, or empty (`~/uploads` or the first file root). */
+  uploadDir: Type.String({ maxLength: 4096, pattern: '^((/|~/)[^\\u0000-\\u001f\\u007f]*|~)?$' }),
+  /** OSC 52 clipboard writes from this host. */
+  osc52: Osc52Policy,
+  /** Port forwards saved with the host. */
+  forwards: Type.Array(SavedForward, { maxItems: MAX_SAVED_FORWARDS }),
   /** Per-host terminal look; empty = the app default. */
   scheme: Type.String({ pattern: '^([a-z0-9-]{1,32})?$' }),
   font: Type.String({ pattern: '^([a-z0-9-]{1,32})?$' }),
@@ -495,6 +687,122 @@ export const AppCalls = {
     params: obj({ requestId: Type.String({ pattern: CHANGE_ID_PATTERN }) }),
     result: Empty,
   },
+  /** Remember (or forget) what a host's programs may do with the clipboard. */
+  'hosts.setOsc52': { params: obj({ id: HostId, policy: Osc52Policy }), result: HostInfo },
+
+  /* Files over a connected session's SFTP (terminal or `hold`). */
+  /** No `path`: the home folder (or the first file root). */
+  'files.list': {
+    params: obj({ sessionId: SessionId, path: Type.Optional(RemotePath) }),
+    result: FileListing,
+  },
+  'files.mkdir': {
+    params: obj({ sessionId: SessionId, parent: RemotePath, name: NewName }),
+    result: FileEntry,
+  },
+  /** Rename or move; replacing an existing entry needs `overwrite` (after a confirm). */
+  'files.rename': {
+    params: obj({
+      sessionId: SessionId,
+      from: RemotePath,
+      toParent: RemotePath,
+      toName: NewName,
+      overwrite: Type.Boolean(),
+    }),
+    result: obj({ path: Type.String({ maxLength: 8192 }) }),
+  },
+  /** A folder with contents needs `recursive` (after a confirm). */
+  'files.delete': {
+    params: obj({ sessionId: SessionId, path: RemotePath, recursive: Type.Boolean() }),
+    result: obj({ deleted: Type.Integer({ minimum: 0 }) }),
+  },
+  /** Main shows an open dialog; the chosen files become grants (empty: cancelled). */
+  'files.pickUpload': { params: Empty, result: obj({ files: Type.Array(UploadGrant) }) },
+  /**
+   * Uploads granted files to `directory` (null: the host's upload folder).
+   * `conflict`: `ask` reports existing names instead of starting them,
+   * `overwrite` replaces them, `rename` picks a free name. `wait`: resolve once
+   * every upload finished (image paste) and return the remote paths.
+   */
+  'files.upload': {
+    params: obj({
+      sessionId: SessionId,
+      directory: Type.Union([RemotePath, Type.Null()]),
+      grants: Type.Array(Type.String({ pattern: GRANT_PATTERN }), { minItems: 1, maxItems: 100 }),
+      conflict: Type.Union([
+        Type.Literal('ask'),
+        Type.Literal('overwrite'),
+        Type.Literal('rename'),
+      ]),
+      wait: Type.Boolean(),
+    }),
+    result: obj({
+      started: Type.Array(TransferInfo),
+      conflicts: Type.Array(Type.String({ maxLength: 255 })),
+      paths: Type.Array(Type.String({ maxLength: 8192 })),
+    }),
+  },
+  /**
+   * Main reads the clipboard itself: an image becomes `clipboard_<time>.png`,
+   * copied files (Windows) are taken as they are; both go to the host's upload
+   * folder and the remote paths come back to be typed. `kind: none`: nothing to upload.
+   */
+  'files.pasteClipboard': {
+    params: obj({ sessionId: SessionId }),
+    result: obj({
+      kind: Type.Union([Type.Literal('none'), Type.Literal('image'), Type.Literal('files')]),
+      paths: Type.Array(Type.String({ maxLength: 8192 })),
+      /** The uploads it ran (their island cards give way to one "path pasted" notice). */
+      transfers: Type.Array(Type.String({ pattern: TRANSFER_ID_PATTERN })),
+    }),
+  },
+  /** Main asks for a folder; each remote file streams there (empty `started`: cancelled). */
+  'files.download': {
+    params: obj({
+      sessionId: SessionId,
+      paths: Type.Array(RemotePath, { minItems: 1, maxItems: 100 }),
+    }),
+    result: obj({ started: Type.Array(TransferInfo) }),
+  },
+  'transfers.cancel': {
+    params: obj({ sessionId: SessionId, id: Type.String({ pattern: TRANSFER_ID_PATTERN }) }),
+    result: Empty,
+  },
+  /** Continues an interrupted transfer from where it stopped (the session must be connected). */
+  'transfers.resume': {
+    params: obj({ sessionId: SessionId, id: Type.String({ pattern: TRANSFER_ID_PATTERN }) }),
+    result: Empty,
+  },
+
+  /* Port forwards over a connected session. */
+  'forwards.start': {
+    params: obj({
+      sessionId: SessionId,
+      spec: ForwardSpec,
+      savedId: Type.Optional(Type.String({ pattern: SAVED_FORWARD_ID_PATTERN })),
+    }),
+    result: ForwardInfo,
+  },
+  'forwards.stop': {
+    params: obj({ sessionId: SessionId, id: Type.String({ pattern: FORWARD_ID_PATTERN }) }),
+    result: Empty,
+  },
+  'forwards.list': { params: Empty, result: obj({ forwards: Type.Array(ForwardInfo) }) },
+
+  /** The keys an SSH agent offers, by fingerprint only. */
+  'agent.list': {
+    params: obj({ agent: AgentSource }),
+    result: obj({
+      available: Type.Boolean(),
+      message: Type.String({ maxLength: 300 }),
+      keys: Type.Array(AgentKey, { maxItems: 100 }),
+    }),
+  },
+  /** Appends the key's public half to ~/.ssh/authorized_keys over SFTP (once). */
+  'keys.install': {
+    params: obj({ sessionId: SessionId, keyId: KeyId }),
+    result: obj({ added: Type.Boolean(), path: Type.String({ maxLength: 8192 }) }),
+  },
 } as const satisfies Record<string, { params: TSchema; result: TSchema }>;
 
 export type AppMethod = keyof typeof AppCalls;
@@ -526,6 +834,11 @@ export interface QuqaApi {
   /** Called with the tag of a notification the user clicked. */
   onNotificationClick(listener: (tag: string) => void): () => void;
   toggleFullScreen(): void;
+  /**
+   * Turns files the user dropped on the page into upload grants. Only real
+   * dropped `File` objects have a path; main checks each one.
+   */
+  grantFiles(files: File[]): Promise<UploadGrant[]>;
   /** Set only when the app was started for the UI smoke test. */
   testHooks: boolean;
 }

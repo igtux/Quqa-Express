@@ -22,6 +22,8 @@ const EVENT_TYPES = new Set([
   'tmux-sessions',
   'history',
   'data',
+  'transfer',
+  'forwards',
   'error',
   'closed',
 ]);

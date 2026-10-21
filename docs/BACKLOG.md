@@ -79,9 +79,8 @@ prompts and paste warnings, left open here, were finished in Phase 2.
 - 2.2 done: generate, import (paste or file; OpenSSH/PEM/PPK via ssh2) with
   saved or per-unlock passphrase, list, copy / export public key, delete;
   "used by N hosts" since Phase 3.
-- 2.3 partly: password and keyboard-interactive prompts engine-side, opt-in
-  saved passwords. Open: "Install my public key on this host" (needs SFTP,
-  Phase 4).
+- 2.3 done: password and keyboard-interactive prompts engine-side, opt-in
+  saved passwords; "Install my public key on this host" since Phase 4.
 - 2.4 partly: pins persist in the vault, TOFU prompt, changed-key block with
   old/new fingerprints and a two-step replace, known_hosts import (plain
   and hashed). Open: scan without authenticating / Re-check in Edit Host /
@@ -156,8 +155,8 @@ prompts and paste warnings, left open here, were finished in Phase 2.
 - 3.7 partly: 20 schemes, 12 font stacks (not bundled), theme dialog,
   zoom, search, bell and agent-finished attention with 30 s cooldown,
   desktop notifications through main, per-terminal mute, shortcuts list (F1),
-  non-Latin shortcuts. Open: bundled fonts, sound packs (a synthesized chime
-  for now), notice island, OSC 52 "remember for this host".
+  non-Latin shortcuts; the notice island and OSC 52 "remember for this host"
+  since Phase 4. Open: bundled fonts, sound packs (a synthesized chime).
 
 ### 3.1 Hosts manager
 - **AC:** add/edit/delete hosts (name, address, port, user, key or
@@ -226,6 +225,28 @@ prompts and paste warnings, left open here, were finished in Phase 2.
 ---
 
 ## Phase 4: Files, uploads, image paste, forwarding, jump hosts, agent
+
+**Status: done**, except where noted below. Design: ADR 0004.
+
+- 4.1 done: browser from a terminal (its connection, tmux folder) or a host
+  card (shell-less `hold` login), Back/Up/Home/Refresh, typed path, search,
+  typed icons, size/date/permissions, new folder, rename, delete (confirmed,
+  recursive), drag to move; file roots enforced after `realpath` (e2e tests
+  for `..` and symlink escapes).
+- 4.2 done: downloads to a folder chosen in main's dialog (`.quqa-part`, a
+  free name, never overwriting); resumable uploads into a hashed partial
+  file; both resume by themselves after a drop and on Resume; Cancel; three
+  at a time per connection; island with progress.
+- 4.3 done: image (and, on Windows, copied files) paste through main's
+  clipboard; drop on a terminal; grants instead of renderer paths. Default
+  upload folder `~/uploads` (or the first file root), not `/tmp`.
+- 4.4 done, plus `-R` and `-D` (SOCKS5) from "later": per-host saved forwards
+  (optionally automatic), ad-hoc ones from a terminal, Tunnels screen.
+- 4.5 done: chains, loops refused, every hop's pin and login, `ProxyJump`.
+- 4.6 done: system agent (OpenSSH pipe / SSH_AUTH_SOCK) and Pageant, keys by
+  fingerprint, forwarding per host with a warning. Open: confirm-each-use.
+- Phase 3 leftovers done: OSC 52 "remember for this host"; 2.3's "Install my
+  public key on this host".
 
 ### 4.1 SFTP file browser
 - **AC:** browse with Back/Up/Home/Refresh, folders first, typed icons,
@@ -306,9 +327,9 @@ prompts and paste warnings, left open here, were finished in Phase 2.
 ## After v1 (v1.x / later)
 
 Toolbar key buttons, background cap/parking, "Where it runs", quick
-commands, transfer queue, history overlay from `capture-pane`, scrollback
+commands, transfer queue (pause, recents), agent confirm-each-use, history overlay from `capture-pane`, scrollback
 export, configurable shortcuts, per-host themes, "My sounds", host list
 export/import, RSA/ECDSA generation; later: macOS and Linux builds, multiple
-windows, remote/dynamic forwarding, proxies, FIDO2 keys, edit remote files
+windows, proxies, FIDO2 keys, edit remote files
 locally, session logging, opt-in unsigned self-update check, optional AI
 recap with the user's own API key (Jarvis ADR 0029, `term/summaries.ts`).

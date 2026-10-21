@@ -39,11 +39,14 @@ import {
   type SessionEvent,
 } from '../shared/ipc.js';
 import { EngineHost } from './engine-host.js';
+import { Grants } from './grants.js';
 import { hardenSessions } from './security.js';
 import { APP_ENTRY, APP_SCHEME, contentTypeOf, isAppUrl, resolveAppPath } from './urls.js';
 import { VaultBroker } from './vault-broker.js';
 
 const here = import.meta.dirname;
+/** What the preload sends for dropped files: their local paths, checked again by Grants. */
+const GrantPaths = Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), { maxItems: 100 });
 const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
 const testHooks = process.env['QUQA_TEST_HOOKS'] === '1';
 
@@ -77,6 +80,7 @@ function start() {
 
   const vaultPath = join(app.getPath('userData'), 'vault.json');
   let broker: VaultBroker | null = null;
+  const grants = new Grants();
 
   const engine = new EngineHost(join(here, 'engine.js'), {
     onEvent(event: SessionEvent) {
@@ -146,7 +150,18 @@ function start() {
     if (!Value.Check(AppCalls[name].params, params)) {
       return { ok: false, code: 'invalid_request', message: 'Invalid request' };
     }
+    // Calls about a session (files, transfers, forwards) only for the window that opened it.
+    const sessionId = (params as { sessionId?: unknown }).sessionId;
+    if (typeof sessionId === 'string' && owners.get(sessionId) !== event.sender.id) {
+      return { ok: false, code: 'not_connected', message: 'The session is not connected' };
+    }
     return broker.handle(name, params as never);
+  });
+
+  ipcMain.handle(Channel.grantFiles, async (event, paths: unknown) => {
+    if (!trusted(event)) throw new Error('Not allowed');
+    if (!Value.Check(GrantPaths, paths)) throw new Error('Invalid files');
+    return grants.grant(paths);
   });
 
   on(Channel.input, InputMessage, (event, message) => {
@@ -309,6 +324,7 @@ function start() {
           const sessionId = prompts.get(requestId);
           return sessionId !== undefined && owners.has(sessionId);
         },
+        grants,
         forceNoOsKeyStore: testHooks && process.env['QUQA_TEST_NO_OS_KEYSTORE'] === '1',
       });
       broker.watchIdle();

@@ -223,3 +223,12 @@ saved host by id; tmux is opt-in per host and driven only by fixed commands
 with `quqa-<32 hex>` names; the hosts screen measures latency with a TCP
 connect to each saved SSH port; desktop notifications are shown by main.
 See [ADR 0003](0003-hosts-and-sessions.md).
+
+## Addendum (2026-10-21, Phase 4)
+
+Files, transfers, port forwards (local, remote, SOCKS), jump hosts and the
+SSH agent run over a session's own connection (or a shell-less `hold`
+login); the renderer uploads by grant token and never names a local path;
+listeners bind to loopback unless the user confirmed otherwise; every jump
+hop keeps its own pin and login; agent forwarding is per host and off by
+default. See [ADR 0004](0004-files-forwards-jumps-agent.md).

@@ -4,7 +4,9 @@
  * are added and found on the hosts screen, the host-key prompt and the
  * engine-side password prompt gate a session, risky pastes ask first, the
  * terminal follows resizes; two tabs, a split, the switcher, the sessions
- * dock, and a tmux session that survives closing its tab and a restart.
+ * dock, and a tmux session that survives closing its tab and a restart;
+ * the file browser (new folder, upload, rename, download, delete), image
+ * paste into a terminal, and a port forward on the Tunnels screen.
  *
  *   docker compose -f docker/compose.yml run --rm dev xvfb-run -a pnpm test:ui
  *
@@ -13,7 +15,8 @@
  * runs against a throw-away profile and is told to act as if the system had
  * no key store, so the vault needs a master password.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -109,6 +112,7 @@ test('the page is served from app://, has no Node access, a strict CSP and only 
       'clipboardWrite',
       'connect',
       'disconnect',
+      'grantFiles',
       'input',
       'notify',
       'onEvent',
@@ -395,6 +399,153 @@ test('keeps a tmux session when its tab closes and re-attaches it from the host'
   await expect(status()).toHaveText('Connected');
   await page.keyboard.type('echo got-$QUQA_MARK\n');
   await expect.poll(terminalText).toMatch(new RegExp(`got-${MARK}`));
+});
+
+/** A 1×1 PNG. */
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+test('browses files: new folder, upload, rename, download and delete', async () => {
+  test.skip(!HOST, 'QUQA_TEST_SSH_HOST is not set');
+  const local = join(profile, 'ui-upload.txt');
+  writeFileSync(local, `uploaded ${MARK}\n`);
+  const downloads = join(profile, 'downloads');
+  mkdirSync(downloads, { recursive: true });
+
+  await page
+    .locator('.terminal-window:not([hidden])')
+    .getByRole('button', { name: 'Files on this host (SFTP)' })
+    .click();
+  const files = page.getByRole('dialog', { name: `Files — ${HOST_NAME}` });
+  await expect(files).toBeVisible();
+  await expect(files.getByTestId('files-path')).toHaveText(`/home/${USER}`);
+
+  const folder = `ui-${MARK}`;
+  await files.getByRole('button', { name: 'New folder' }).click();
+  const naming = page.getByRole('dialog', { name: 'New folder' });
+  await naming.getByLabel('Folder name').fill(folder);
+  await naming.getByRole('button', { name: 'Create' }).click();
+  await files.getByTestId('file-row').filter({ hasText: folder }).click();
+  await expect(files.getByTestId('files-path')).toHaveText(`/home/${USER}/${folder}`);
+  await expect(files.getByText('This folder is empty')).toBeVisible();
+
+  // Upload through the (stubbed) open dialog; the island shows it.
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as never;
+  }, local);
+  await files.getByRole('button', { name: 'Upload' }).click();
+  await expect(files.getByTestId('file-row')).toHaveCount(1);
+  await expect(files.getByTestId('file-row')).toContainText('ui-upload.txt');
+  await expect(page.getByTestId('notice-island')).toContainText(/Uploaded ui-upload.txt/);
+
+  // Rename it.
+  await files.getByRole('button', { name: 'Rename ui-upload.txt' }).click();
+  const rename = page.getByRole('dialog', { name: 'Rename ui-upload.txt' });
+  await rename.getByLabel('New name').fill('renamed.txt');
+  await rename.getByRole('button', { name: 'Rename' }).click();
+  await expect(files.getByTestId('file-row')).toContainText('renamed.txt');
+
+  // Download into a (stubbed) chosen folder.
+  await app.evaluate(({ dialog }, path) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as never;
+  }, downloads);
+  await files.getByRole('button', { name: 'Download renamed.txt' }).click();
+  await expect.poll(() => existsSync(join(downloads, 'renamed.txt'))).toBe(true);
+  expect(readFileSync(join(downloads, 'renamed.txt'), 'utf8')).toBe(`uploaded ${MARK}\n`);
+
+  // Up, then delete the folder (with its file) after a confirm.
+  await files.getByRole('button', { name: 'Up', exact: true }).click();
+  await expect(files.getByTestId('files-path')).toHaveText(`/home/${USER}`);
+  await files.getByRole('button', { name: `Delete ${folder}` }).click();
+  const confirm = page.getByRole('dialog', { name: `Delete ${folder}?` });
+  await expect(confirm).toContainText('everything in it');
+  await confirm.getByRole('button', { name: 'Delete' }).click();
+  await expect(files.getByTestId('file-row').filter({ hasText: folder })).toHaveCount(0);
+  await files.getByRole('button', { name: 'Close files' }).click();
+  await expect(files).toBeHidden();
+});
+
+test('pastes an image into the terminal as an uploaded path', async () => {
+  test.skip(!HOST, 'QUQA_TEST_SSH_HOST is not set');
+  await app.evaluate(async (electron, base64) => {
+    const png = Buffer.from(base64, 'base64');
+    const { ClipboardItem, clipboard } = electron as unknown as {
+      ClipboardItem: new (items: Record<string, Blob>) => unknown;
+      clipboard: { write(items: unknown[]): Promise<void> };
+    };
+    await clipboard.write([
+      new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) }),
+    ]);
+  }, PNG.toString('base64'));
+  await page.locator('.terminal-window:not([hidden]) .terminal-pane.active-pane').click();
+  await page.keyboard.press('Control+Shift+V');
+  await expect
+    .poll(terminalText)
+    .toMatch(new RegExp(`/home/${USER}/uploads/clipboard_\\d+(-\\d+)?\\.png`));
+  await expect(page.getByTestId('notice-island')).toContainText('Image uploaded — path pasted');
+  // Make it a command: the file on the host is the image.
+  await page.keyboard.press('Control+A');
+  await page.keyboard.type('f=');
+  await page.keyboard.press('Enter');
+  // (The clipboard re-encodes the image, so check the PNG signature, not the size.)
+  await page.keyboard.type('echo "kind-$(head -c 4 "$f" | tail -c 3)"; rm -f "$f"\n');
+  await expect.poll(terminalText).toMatch(/^kind-PNG\s*$/m);
+});
+
+test('starts a port forward from a terminal and lists it under Tunnels', async () => {
+  test.skip(!HOST, 'QUQA_TEST_SSH_HOST is not set');
+  const port = await new Promise<number>((resolve) => {
+    const server = createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      server.close(() => resolve(typeof address === 'object' && address ? address.port : 0));
+    });
+  });
+  await page
+    .locator('.terminal-window:not([hidden])')
+    .getByRole('button', { name: 'Port forwarding over this connection' })
+    .click();
+  const dialog = page.getByRole('dialog', { name: /^Port forward — / });
+  await dialog.getByLabel('Port', { exact: true }).first().fill(String(port));
+  await dialog.getByLabel('Destination (from the server)').fill('localhost');
+  await dialog.getByLabel('Port', { exact: true }).last().fill('22');
+  // Not loopback needs the warned opt-in.
+  await dialog.getByLabel('Listen on (here)').fill('0.0.0.0');
+  await dialog.getByRole('button', { name: 'Start' }).click();
+  await expect(dialog.getByRole('alert')).toContainText(/Confirm/);
+  await dialog.getByLabel('Listen on (here)').fill('127.0.0.1');
+  await dialog.getByRole('button', { name: 'Start' }).click();
+  await expect(dialog).toBeHidden();
+
+  // The tunnel works: the server's sshd answers through it.
+  const banner = await new Promise<string>((resolve, reject) => {
+    const socket = createConnection(port, '127.0.0.1');
+    socket.once('data', (chunk) => {
+      socket.destroy();
+      resolve(chunk.toString('latin1'));
+    });
+    socket.once('error', reject);
+  });
+  expect(banner).toMatch(/^SSH-2\.0-/);
+
+  await page.getByRole('tab', { name: 'Hosts' }).first().click();
+  await section('Tunnels').click();
+  const row = page.getByTestId('forward-row');
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText(`127.0.0.1:${port} → localhost:22`);
+  await expect(row).toContainText('listening');
+  await row.getByRole('button', { name: /^Stop / }).click();
+  await expect(row).toHaveCount(0);
+  await section('Hosts').click();
+
+  // Files from a host card log in without a shell (the saved password is used).
+  await page.getByRole('button', { name: `Files on ${HOST_NAME}` }).click();
+  const files = page.getByRole('dialog', { name: `Files — ${HOST_NAME}` });
+  await expect(files.getByTestId('files-path')).toHaveText(`/home/${USER}`);
+  await files.getByRole('button', { name: 'Close files' }).click();
+  await page.getByTestId('app-tab').nth(1).click();
 });
 
 test('keeps hosts and secrets sealed in the vault file', async () => {

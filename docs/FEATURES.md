@@ -116,7 +116,7 @@ Short names used below:
 | Paste button in the toolbar | `term/TerminalModal.tsx` | v1 | Same. |
 | Chunked paste: large input sent in 4 KiB slices with progress and **Cancel paste** | `term/connection.ts` (PASTE_CHUNK), `term/TerminalProvider.tsx` | v1 | Same; slicing happens in the engine, the renderer only shows progress and cancel. |
 | Paste safety warning (multi-line or very large paste, paste containing control characters) | — (new) | v1 | New: confirm dialog before sending multi-line text outside bracketed paste and before pastes over a size limit; "don't ask again" per host. **Built (Phase 2), always on, also for control characters; "don't ask again" waits for per-host settings.** |
-| OSC 52 clipboard write from programs (Claude Code inside tmux); read requests ignored; tmux `set-clipboard on` + passthrough set on attach | `term/connection.ts`, `gw/terminals/tmux-attach.ts` | v1 | Write requires a confirm per host the first time ("Allow this host to set the clipboard?") then may be remembered; reads always denied. |
+| OSC 52 clipboard write from programs (Claude Code inside tmux); read requests ignored; tmux `set-clipboard on` + passthrough set on attach | `term/connection.ts`, `gw/terminals/tmux-attach.ts` | v1 | Write requires a confirm per host the first time ("Allow this host to set the clipboard?") then may be remembered; reads always denied. **Built (Phase 4): "Remember my choice for this host" in the dialog, and Ask / Allow / Deny in Edit host; allowed writes show a "Copied" notice.** |
 | Refused clipboard write → notice with a **Copy** button | `term/connection.ts`, `term/TerminalProvider.tsx` | v1 | Kept for the "ask" case: the notice shows the text and a Copy button. |
 | Shortcuts work on Georgian and other non-Latin layouts (match by key code) | `web/kit/keys.ts` | v1 | Ported. **Built (Phase 3) for all app shortcuts.** |
 | Ctrl+Shift+K switcher inside the terminal, plain Ctrl+K only outside (shell keeps kill-line) | `term/SessionSwitcher.tsx`, `term/connection.ts` | v1 | Same. **Built (Phase 3).** |
@@ -128,18 +128,18 @@ Short names used below:
 
 | Feature | Jarvis | Status | quqa-express mapping |
 | --- | --- | --- | --- |
-| Image paste → uploaded to the host and its **path** pasted into the terminal (so Claude Code can read it) | `term/connection.ts` (onImagePaste), `term/TerminalProvider.tsx`, `web/files/upload.ts` | v1 | Engine writes the image over SFTP into the terminal's folder (or a per-host upload folder, default `/tmp`) and types the shell-quoted path. |
-| Drag and drop files onto a terminal → upload to the program's folder (if inside the file roots) else the first root, drop overlay | `term/TerminalModal.tsx`, `term/TerminalProvider.tsx`, legacy-ui `01b` §8.3 | v1 | Same; the renderer passes file paths it received from the drop, main validates them and the engine reads them from disk. |
-| File transfer menu (Upload / Download) in the terminal header | `term/TerminalModal.tsx` | v1 | Opens the file browser for that host. |
-| Upload notices with progress on the notice island | `term/notices.ts`, `term/NoticeIsland.tsx` | v1 | Same. |
+| Image paste → uploaded to the host and its **path** pasted into the terminal (so Claude Code can read it) | `term/connection.ts` (onImagePaste), `term/TerminalProvider.tsx`, `web/files/upload.ts` | v1 | Engine writes the image over SFTP into the terminal's folder (or a per-host upload folder, default `/tmp`) and types the shell-quoted path. **Built (Phase 4): Ctrl+V / Ctrl+Shift+V / right-click with an image (or files copied in Explorer) on the clipboard; main reads the clipboard itself, uploads `clipboard_<time>.png` to the host's upload folder (default `~/uploads`, else the first file root) and types the quoted path (Windows hosts get `C:\…`).** |
+| Drag and drop files onto a terminal → upload to the program's folder (if inside the file roots) else the first root, drop overlay | `term/TerminalModal.tsx`, `term/TerminalProvider.tsx`, legacy-ui `01b` §8.3 | v1 | Same; the renderer passes file paths it received from the drop, main validates them and the engine reads them from disk. **Built (Phase 4): the preload turns dropped `File`s into grants; tmux folder when known, else the upload folder; a taken name gets `-1`.** |
+| File transfer menu (Upload / Download) in the terminal header | `term/TerminalModal.tsx` | v1 | Opens the file browser for that host. **Built (Phase 4) as the Files button (over the terminal's own connection).** |
+| Upload notices with progress on the notice island | `term/notices.ts`, `term/NoticeIsland.tsx` | v1 | Same. **Built (Phase 4): uploads and downloads with progress, Cancel, Resume.** |
 | "Where it runs": folder · user · program of the foreground program (from tmux and `/proc`, follows sudo), Copy path, Open in Files | `term/WhereButton.tsx`, `term/where.ts` | v1.x | Engine runs one fixed read-only command over SSH exec (tmux sessions only). |
-| SFTP file browser: Back / Up / Home / Refresh, folders first, typed icons, search | `mach/Files.tsx` | v1 | Same UI, opened from a terminal (starts in its program's folder) or from a host. |
-| Create folder, rename, delete (recursive), drag a row onto a folder to move | `mach/Files.tsx`, `gw/files/remote-files.ts` | v1 | Same, with confirms for delete. Atomic posix-rename where the server supports it. |
-| Download (streamed) | `mach/Files.tsx`, `gw/files/remote-files.ts` | v1 | Save dialog in main, engine streams SFTP → disk. |
-| Upload: chunked and resumable (resume from partial file size), overwrite only after confirm | `web/files/upload.ts`, `gw/files/remote-files.ts` | v1 | Engine streams disk → SFTP; resume uses the same partial-file scheme. |
-| File roots: every path normalised and, after resolving symlinks, kept under the host's allowed roots | `gw/files/remote-files.ts`, `gw/files/remote-paths.ts` | v1 | Kept as an optional per-host restriction (default `/`: the user owns their hosts). |
+| SFTP file browser: Back / Up / Home / Refresh, folders first, typed icons, search | `mach/Files.tsx` | v1 | Same UI, opened from a terminal (starts in its program's folder) or from a host. **Built (Phase 4): plus size, date and permissions, a typed path, and a shell-less "hold" login when opened from a host card.** |
+| Create folder, rename, delete (recursive), drag a row onto a folder to move | `mach/Files.tsx`, `gw/files/remote-files.ts` | v1 | Same, with confirms for delete. Atomic posix-rename where the server supports it. **Built (Phase 4).** |
+| Download (streamed) | `mach/Files.tsx`, `gw/files/remote-files.ts` | v1 | Save dialog in main, engine streams SFTP → disk. **Built (Phase 4): a folder dialog; a `.quqa-part` file renamed to a free name when complete, resumed after a drop.** |
+| Upload: chunked and resumable (resume from partial file size), overwrite only after confirm | `web/files/upload.ts`, `gw/files/remote-files.ts` | v1 | Engine streams disk → SFTP; resume uses the same partial-file scheme. **Built (Phase 4): button or drop on the list; resumes by itself when the connection comes back; Cancel removes the partial file.** |
+| File roots: every path normalised and, after resolving symlinks, kept under the host's allowed roots | `gw/files/remote-files.ts`, `gw/files/remote-paths.ts` | v1 | Kept as an optional per-host restriction (default `/`: the user owns their hosts). **Built (Phase 4), tested against `..` and symlink escapes.** |
 | "Open files as" (identity) | `mach/Files.tsx` | excluded | Multi-user. |
-| Transfer manager (queue, pause/resume, recents, pins) | GAP in Jarvis (legacy only) | v1.x | Queue with pause/cancel. |
+| Transfer manager (queue, pause/resume, recents, pins) | GAP in Jarvis (legacy only) | v1.x | Queue with pause/cancel. **Partly (Phase 4): three transfers at a time per connection, the rest queued; Cancel and Resume on the island.** |
 | Edit a remote file in a local editor (download, watch, upload on save) | — | later | New. |
 | Local ↔ remote two-pane browser | — | later | New. |
 
@@ -147,10 +147,10 @@ Short names used below:
 
 | Feature | Jarvis | Status | quqa-express mapping |
 | --- | --- | --- | --- |
-| Host: display name, address, port, SSH user, type (Linux/Windows), key, description, optional file roots | `mach/HostForms.tsx`, Jarvis FEATURES "Hosts and keys" | v1 | Same fields plus optional password auth, jump host, tmux toggle, colour/tags. **Built (Phase 3) without file roots (they come with the file browser, Phase 4).** |
+| Host: display name, address, port, SSH user, type (Linux/Windows), key, description, optional file roots | `mach/HostForms.tsx`, Jarvis FEATURES "Hosts and keys" | v1 | Same fields plus optional password auth, jump host, tmux toggle, colour/tags. **Built (Phase 3); file roots, upload folder, agent, agent forwarding, OSC 52 choice and saved forwards since Phase 4.** |
 | Add Host form and Edit Host dialog; changing address or port re-checks host-key trust | `mach/HostForms.tsx` | v1 | Same. **Built (Phase 3); re-checking the host key on an address change is not done yet.** |
 | Delete host | `mach/SshManager.tsx` | v1 | Same (asks; offers to forget its pinned keys). **Built (Phase 3), optionally forgetting the pinned key.** |
-| SSH Manager: dashboard (total hosts, online/offline, avg latency), host cards with Open Terminal, Files, Edit, Ping, Test reachability, More | `mach/SshManager.tsx` | v1 | Same; becomes the start screen. **Built (Phase 3) with a compact status line instead of stat cards, plus Sessions, Duplicate and favorite; Files comes with Phase 4.** |
+| SSH Manager: dashboard (total hosts, online/offline, avg latency), host cards with Open Terminal, Files, Edit, Ping, Test reachability, More | `mach/SshManager.tsx` | v1 | Same; becomes the start screen. **Built (Phase 3) with a compact status line instead of stat cards, plus Sessions, Duplicate and favorite; Files and Install key since Phase 4.** |
 | Live latency per host: one SSH keepalive round trip on the pooled connection, cached 20 s; Ping all hosts | `gw/ssh/connection-pool.ts`, `mach/SshManager.tsx` | v1 | Same; only for hosts with a live connection, plus TCP connect time for others (no ICMP). **Built (Phase 3) as the TCP connect time to the SSH port, no login (ADR 0003).** |
 | Host groups (filter, collapsible group headers, online/total count, Ungrouped) | legacy-ui `03a` §5.4 (GAP in NG) | v1 | Ported from the legacy design. **Built (Phase 3).** |
 | Tags and search/filter over hosts | — | v1 | New: free tags, quick filter. **Built (Phase 3): fuzzy search plus `tag:` and `group:` filters.** |
@@ -177,9 +177,9 @@ Short names used below:
 | Private keys sealed at rest (AES-256-GCM bound to a context string) and never returned by any API | `packages/crypto/src/secret-box.ts`, `gw/credentials/credential-store.ts` | v1 | Vault: per-item XChaCha20-Poly1305 (or AES-256-GCM) with the item id as associated data; data key wrapped by Electron `safeStorage` (DPAPI) and optionally a master password (Argon2id). See ADR 0001. **Built (Phase 2): XChaCha20-Poly1305 + Argon2id (@noble), ADR 0002.** |
 | Passphrase sealed with the key | `gw/credentials/credential-store.ts` | v1 | Option: store the passphrase in the vault, or ask each time (kept in engine memory for the session only). **Built (Phase 2).** |
 | Re-authentication before importing a key | `mach/SshKeysTab.tsx` | v1.x | Becomes "unlock the vault" when a master password is set. |
-| Install a public key on a host (`ssh-copy-id` equivalent) after a password login | — | v1 | New: engine appends to `~/.ssh/authorized_keys` over SFTP (no shell string building). |
+| Install a public key on a host (`ssh-copy-id` equivalent) after a password login | — | v1 | New: engine appends to `~/.ssh/authorized_keys` over SFTP (no shell string building). **Built (Phase 4): key button on a Linux host card, confirmed, idempotent, `~/.ssh` 0700 and a new file 0600; optionally switches the host to that key.** |
 | Password authentication and keyboard-interactive (2FA prompts) | — (Jarvis is key-only) | v1 | New: prompts are shown by the renderer, answers go straight to the engine; saving the password in the vault is opt-in. **Built (Phase 2): prompts are engine requests, answered once from a dialog.** |
-| SSH agent: Windows OpenSSH agent pipe, Pageant | — | v1 | Engine uses ssh2's agent support; agent forwarding off by default, per host opt-in with a warning. |
+| SSH agent: Windows OpenSSH agent pipe, Pageant | — | v1 | Engine uses ssh2's agent support; agent forwarding off by default, per host opt-in with a warning. **Built (Phase 4): login "SSH agent" (OpenSSH pipe / SSH_AUTH_SOCK, or Pageant), "Show its keys" by fingerprint, forwarding per host with a warning. Confirm-each-use is not built (v1.x).** |
 | Hardware keys (FIDO2 `sk-` keys) | — | later | Through the system agent. |
 
 ## 9. Host-key trust
@@ -218,16 +218,16 @@ Short names used below:
 | Desktop notification "<name> needs you" in the background | `term/TerminalProvider.tsx` | v1 | Native notification via Electron; clicking focuses that tab. Taskbar flash/badge on Windows. **Built (Phase 3).** |
 | Sound packs Knight (12) and Default (5), single sound or shuffle, preview, volume | `term/bell.ts`, `term/soundPacks.ts` | v1 | Bundled with the app (sound files owned by AURA, ported). **Not yet: a synthesized chime instead of the packs (ADR 0003).** |
 | "My sounds": add MP3/WAV/OGG/M4A (≤ 2 MB each, 30 total) | `term/bell.ts`, `term/soundStore.ts` | v1.x | Stored in the app data folder. |
-| Notice island under the toolbar (uploads, clipboard, copy, paste progress) | `term/notices.ts`, `term/NoticeIsland.tsx` | v1 | Same. |
+| Notice island under the toolbar (uploads, clipboard, copy, paste progress) | `term/notices.ts`, `term/NoticeIsland.tsx` | v1 | Same. **Built (Phase 4): transfers, pasted paths, copies, errors.** |
 | Settings follow the account (ADR 0032) | `term/bell.ts`, `term/themes.ts` | excluded | No accounts: one local settings file. |
 
 ## 12. Network features
 
 | Feature | Jarvis | Status | quqa-express mapping |
 | --- | --- | --- | --- |
-| Local port forwarding (`-L`) | — (Jarvis uses direct-tcpip only internally, `gw/ssh/connection-pool.ts`) | v1 | New: per host or ad hoc, bound to 127.0.0.1 by default; list of active tunnels with stop. |
-| Remote forwarding (`-R`), dynamic SOCKS (`-D`) | — | later | New, opt-in with warnings. |
-| Jump hosts (ProxyJump, chained) | — | v1 | New: a host may name another host as its jump; host keys are pinned for every hop. |
+| Local port forwarding (`-L`) | — (Jarvis uses direct-tcpip only internally, `gw/ssh/connection-pool.ts`) | v1 | New: per host or ad hoc, bound to 127.0.0.1 by default; list of active tunnels with stop. **Built (Phase 4): from a terminal's tunnel button or saved with the host ("start automatically" opens it with the first connection); Tunnels screen with state, connections, bytes and Stop; paused while the connection is down, reopened after.** |
+| Remote forwarding (`-R`), dynamic SOCKS (`-D`) | — | later | New, opt-in with warnings. **Built early (Phase 4): same dialog and list; SOCKS5 CONNECT without authentication.** |
+| Jump hosts (ProxyJump, chained) | — | v1 | New: a host may name another host as its jump; host keys are pinned for every hop. **Built (Phase 4): chains through saved hosts, each with its own login and pin; `ProxyJump` from `~/.ssh/config` resolves to saved hosts; loops refused.** |
 | HTTP/SOCKS proxy for the SSH connection | — | later | New. |
 | X11 forwarding | — | excluded | Needs a local X server; out of scope. |
 

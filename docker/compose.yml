@@ -24,16 +24,25 @@ services:
       QUQA_TEST_SSH_PORT: '22'
       QUQA_TEST_SSH_USER: quqa
       QUQA_TEST_SSH_PASSWORD: quqa-test-password
+      # Reachable only through test-sshd (jump host tests).
+      QUQA_TEST_SSH_INNER_HOST: test-sshd-inner
     # Chromium needs more shared memory than Docker's 64 MB default.
     shm_size: 1gb
-    depends_on: [test-sshd]
+    depends_on: [test-sshd, test-sshd-inner]
     networks: [quqa-dev]
 
   test-sshd:
     build:
       context: ./test-sshd
     image: quqa-express-test-sshd:latest
-    networks: [quqa-dev]
+    networks: [quqa-dev, quqa-inner]
+
+  # A second server on a private network the dev container cannot reach:
+  # only through test-sshd as a jump host.
+  test-sshd-inner:
+    image: quqa-express-test-sshd:latest
+    depends_on: [test-sshd]
+    networks: [quqa-inner]
 
 volumes:
   pnpm-store:
@@ -41,3 +50,5 @@ volumes:
 
 networks:
   quqa-dev:
+  quqa-inner:
+    internal: true

@@ -41,6 +41,12 @@ export const Channel = {
   notificationClick: 'window:notification-click',
   /** send: toggle full screen */
   fullScreen: 'window:full-screen',
+  /**
+   * invoke (preload only): local paths of files the user dropped, which main
+   * checks and turns into upload grants. The page cannot name a path itself:
+   * the preload reads it from a real drop with `webUtils.getPathForFile`.
+   */
+  grantFiles: 'files:grant',
 } as const;
 
 export const MAX_PASSWORD_LENGTH = 1024;
@@ -93,6 +99,10 @@ export type CallErrorCode =
   | 'not_found'
   | 'io'
   | 'invalid_request'
+  /** The session is not connected (yet, or any more). */
+  | 'not_connected'
+  /** The remote account may not do that, or the path is outside the host's file roots. */
+  | 'permission_denied'
   | 'engine';
 
 export type CallResult<T> =
@@ -159,6 +169,18 @@ export type SessionEvent =
       size: number;
     }
   | { type: 'data'; sessionId: string; data: Uint8Array }
+  | {
+      /** An upload or download over the session's connection changed state or progressed. */
+      type: 'transfer';
+      sessionId: string;
+      transfer: TransferEvent;
+    }
+  | {
+      /** The session's port forwards (all of them, after any change). */
+      type: 'forwards';
+      sessionId: string;
+      forwards: ForwardEvent[];
+    }
   | { type: 'error'; sessionId: string; code: SshErrorCode; message: string }
   | { type: 'closed'; sessionId: string; exitCode: number | null };
 
@@ -175,4 +197,45 @@ export interface TmuxSessionInfo {
   /** Folder and program of the active pane. */
   path: string;
   command: string;
+}
+
+export type TransferState = 'running' | 'interrupted' | 'done' | 'failed' | 'cancelled';
+
+/** One upload or download (TransferInfo in ipc.ts is its schema). */
+export interface TransferEvent {
+  id: string;
+  sessionId: string;
+  direction: 'upload' | 'download';
+  /** The file name (remote for uploads' target, local for downloads' result). */
+  name: string;
+  /** The remote file (its final path for uploads). */
+  remotePath: string;
+  bytes: number;
+  total: number;
+  state: TransferState;
+  /** Why it failed or was interrupted; safe to show. */
+  error: string;
+}
+
+export type ForwardKind = 'local' | 'remote' | 'dynamic';
+export type ForwardState = 'starting' | 'listening' | 'paused' | 'failed';
+
+/** One port forward (ForwardInfo in ipc.ts is its schema). */
+export interface ForwardEvent {
+  id: string;
+  sessionId: string;
+  hostId: string | null;
+  /** The saved forward of the host it was started from, if any. */
+  savedId: string | null;
+  kind: ForwardKind;
+  bindAddress: string;
+  bindPort: number;
+  destHost: string;
+  destPort: number;
+  state: ForwardState;
+  error: string;
+  /** Open connections through it right now. */
+  connections: number;
+  bytesIn: number;
+  bytesOut: number;
 }

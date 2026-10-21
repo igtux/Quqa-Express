@@ -17,7 +17,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal as XTerm } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import type { Auth, QuqaApi } from '../../../shared/ipc.js';
+import type { Auth, Osc52Policy, QuqaApi } from '../../../shared/ipc.js';
 import {
   FATAL_ERRORS,
   type PromptKind,
@@ -147,6 +147,14 @@ export interface SessionCallbacks {
   onTmuxSessions?(session: TerminalSession, available: boolean, sessions: TmuxSessionInfo[]): void;
   /** The session reached `ready`. */
   onReady?(session: TerminalSession): void;
+  /** Ctrl+V of an image (or of copied files): upload and type the paths. */
+  onUploadPaste?(session: TerminalSession): void;
+  /** What the host lets programs do with the clipboard (OSC 52). */
+  osc52Policy?(session: TerminalSession): Osc52Policy;
+  /** The user chose "remember for this host" in the clipboard dialog. */
+  onRememberOsc52?(session: TerminalSession, policy: Osc52Policy): void;
+  /** A program's clipboard write went through (allowed). */
+  onClipboardWritten?(session: TerminalSession, text: string): void;
 }
 
 export interface Look {
@@ -155,14 +163,22 @@ export interface Look {
   zoom: number;
 }
 
+type SharedEvent = Extract<SessionEvent, { type: 'transfer' | 'forwards' }>;
+
 /** Routes the bridge's single event stream to sessions by id. */
 export class SessionEvents {
   private readonly handlers = new Map<string, (event: SessionEvent) => void>();
   /** Events that arrive before `connect` resolved with the session id. */
   private readonly early = new Map<string, SessionEvent[]>();
+  /** Transfers and forwards go to the workspace whichever session they belong to. */
+  private readonly shared = new Set<(event: SharedEvent) => void>();
 
   constructor(api: QuqaApi) {
     api.onEvent((event) => {
+      if (event.type === 'transfer' || event.type === 'forwards') {
+        for (const listener of this.shared) listener(event);
+        return;
+      }
       const handler = this.handlers.get(event.sessionId);
       if (handler) handler(event);
       else {
@@ -171,6 +187,11 @@ export class SessionEvents {
         this.early.set(event.sessionId, queue);
       }
     });
+  }
+
+  onShared(listener: (event: SharedEvent) => void): () => void {
+    this.shared.add(listener);
+    return () => this.shared.delete(listener);
   }
 
   listen(sessionId: string, handler: (event: SessionEvent) => void): () => void {
@@ -323,7 +344,16 @@ export class TerminalSession {
     // OSC 52: write-only and only after the user agrees; reads are denied.
     this.term.parser.registerOscHandler(52, (data) => {
       const request = parseOsc52(data);
-      if (request.kind === 'write') this.update({ clipboardRequest: request.text });
+      if (request.kind !== 'write') return true;
+      const policy = this.callbacks.osc52Policy?.(this) ?? 'ask';
+      if (policy === 'allow') {
+        void this.api.clipboardWrite(request.text).then(
+          () => this.callbacks.onClipboardWritten?.(this, request.text),
+          () => undefined,
+        );
+      } else if (policy === 'ask') {
+        this.update({ clipboardRequest: request.text });
+      }
       return true;
     });
 
@@ -363,7 +393,20 @@ export class TerminalSession {
       (event) => {
         event.preventDefault();
         event.stopImmediatePropagation();
-        const text = event.clipboardData?.getData('text/plain') ?? '';
+        const data = event.clipboardData;
+        // An image (or copied files) uploads to the host and types its path (Jarvis 01b §8.2).
+        const items = [...(data?.items ?? [])];
+        const text = data?.getData('text/plain') ?? '';
+        const image = items.some((item) => item.kind === 'file' && item.type.startsWith('image/'));
+        const files = items.some((item) => item.kind === 'file');
+        if (
+          (image || (files && !text)) &&
+          this.snapshot.state === 'connected' &&
+          this.callbacks.onUploadPaste
+        ) {
+          this.callbacks.onUploadPaste(this);
+          return;
+        }
         if (text) this.pasteText(text);
       },
       { capture: true },
@@ -400,6 +443,11 @@ export class TerminalSession {
 
   setBell(on: boolean): void {
     this.bell = on;
+  }
+
+  /** The engine session, once `connect` returned it. */
+  get id(): string | null {
+    return this.sessionId;
   }
 
   get hostId(): string | null {
@@ -828,11 +876,24 @@ export class TerminalSession {
     return null;
   }
 
-  answerClipboard(allow: boolean): void {
+  answerClipboard(allow: boolean, remember = false): void {
     const text = this.snapshot.clipboardRequest;
     this.update({ clipboardRequest: null });
-    if (allow && text) void this.api.clipboardWrite(text).catch(() => undefined);
+    if (allow && text) {
+      void this.api.clipboardWrite(text).then(
+        () => this.callbacks.onClipboardWritten?.(this, text),
+        () => undefined,
+      );
+    }
+    if (remember) this.callbacks.onRememberOsc52?.(this, allow ? 'allow' : 'deny');
     this.refocus();
+  }
+
+  /** Types text as a paste (bracketed when the program asked), e.g. uploaded paths. */
+  typePaste(text: string): void {
+    if (this.snapshot.state !== 'connected' || !text) return;
+    this.term.paste(text);
+    this.focus();
   }
 
   private acknowledge(bytes: number) {
@@ -960,6 +1021,8 @@ export class TerminalSession {
     try {
       const text = await this.api.clipboardRead();
       if (text) this.pasteText(text);
+      // No text: maybe an image or copied files, which main reads itself.
+      else this.callbacks.onUploadPaste?.(this);
     } catch {
       // Clipboard unavailable.
     }
@@ -1183,7 +1246,7 @@ export class HostProbe {
   }
 }
 
-function friendlyInvokeError(error: unknown): string {
+export function friendlyInvokeError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   // Electron prefixes errors from ipcMain.handle with the channel name.
   return message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');

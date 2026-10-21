@@ -15,6 +15,7 @@ import ssh2 from 'ssh2';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Engine, HIGH_WATER_BYTES, type EngineMessage } from '../../src/engine/engine.js';
 import type { AdhocConnect, ConnectRequest, SessionEvent } from '../../src/shared/ipc.js';
+import { ed25519Pair } from '../keypair.js';
 
 const { Client, utils } = ssh2;
 
@@ -251,7 +252,7 @@ describe.skipIf(!HOST)('SSH engine against a real server', () => {
   it('blocks a changed host key, shows both fingerprints, and connects after the pin is replaced', async () => {
     const h = await harness({ acceptHostKeys: false });
     // A known_hosts entry pinning some other key for the server.
-    const other = utils.parseKey(utils.generateKeyPairSync('ed25519').public);
+    const other = utils.parseKey(ed25519Pair().public);
     if (other instanceof Error || Array.isArray(other)) throw new Error('bad key');
     const name = PORT === 22 ? password.host : `[${password.host}]:${PORT}`;
     const file = join(root, `known_hosts-${randomBytes(4).toString('hex')}`);
@@ -398,7 +399,7 @@ describe.skipIf(!HOST)('SSH engine against a real server', () => {
   });
 
   it('logs in with an imported encrypted key, asking for its passphrase once per unlock', async () => {
-    const pair = utils.generateKeyPairSync('ed25519', {
+    const pair = ed25519Pair({
       passphrase: 'correct horse',
       cipher: 'aes256-ctr',
       rounds: 16,

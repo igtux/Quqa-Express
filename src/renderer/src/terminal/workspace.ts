@@ -9,13 +9,36 @@
  * that should survive a restart (favorites, aliases, layout, look) is saved
  * in the vault through `ui.save`; nothing is kept in renderer storage.
  */
-import type { AdhocConnect, HostInfo, QuqaApi, UiState } from '../../../shared/ipc.js';
+import type {
+  AdhocConnect,
+  ForwardInfo,
+  ForwardSpec,
+  HostInfo,
+  Osc52Policy,
+  QuqaApi,
+  SavedForward,
+  UiState,
+} from '../../../shared/ipc.js';
 import type { TmuxSessionInfo } from '../../../shared/protocol.js';
-import { call } from '../api.js';
+import { call, messageOf } from '../api.js';
 import { playChime } from './chime.js';
 import { HostProbe, SessionEvents, TerminalSession, type Look, type Target } from './connection.js';
 import { buildRows, sortRows, type DockRow, type OpenTerminal } from './dockModel.js';
+import { HostLink } from './link.js';
+import { Notices } from './notices.js';
+import { insideRoots, typedPaths } from './paths.js';
 import { clampZoom } from './themes.js';
+
+/** Where the file browser works: a terminal's own connection, or a `hold` link to a host. */
+export type FilesTarget = { kind: 'terminal'; tag: string } | { kind: 'link'; hostId: string };
+
+export interface FilesView {
+  target: FilesTarget;
+  hostId: string | null;
+  title: string;
+  /** The folder to start in (the terminal's program folder when known). */
+  start: string | null;
+}
 
 export type Split = 'none' | 'h' | 'v';
 
@@ -87,6 +110,13 @@ export class Workspace {
   dockOpen = false;
   /** One-shot logins listing or ending tmux sessions; several may run at once. */
   probes: HostProbe[] = [];
+  /** Shell-less connections (file browser, tunnels, key install), one per host. */
+  readonly links = new Map<string, HostLink>();
+  /** Port forwards by session, as the engine last reported them. */
+  readonly forwardsBySession = new Map<string, ForwardInfo[]>();
+  /** The open file browser. */
+  files: FilesView | null = null;
+  readonly notices: Notices;
   /** Pinned plain shells (not saved: they do not survive a restart). */
   private readonly pinnedTags = new Set<string>();
   /** Names of plain shells (not saved). */
@@ -107,6 +137,22 @@ export class Workspace {
   ) {
     api.onNotificationClick((tag) => {
       if (this.terms.has(tag)) this.focusTerm(tag);
+    });
+    this.notices = new Notices({
+      cancel: (t) =>
+        void call('transfers.cancel', { sessionId: t.sessionId, id: t.id }).catch(() => undefined),
+      resume: (t) =>
+        void call('transfers.resume', { sessionId: t.sessionId, id: t.id }).catch((error) =>
+          this.notices.notice(`Could not resume ${t.name}`, 'error', { detail: messageOf(error) }),
+        ),
+    });
+    events.onShared((event) => {
+      if (event.type === 'transfer') this.notices.onTransfer(event.transfer);
+      else {
+        if (event.forwards.length === 0) this.forwardsBySession.delete(event.sessionId);
+        else this.forwardsBySession.set(event.sessionId, event.forwards);
+        this.changed();
+      }
     });
   }
 
@@ -229,6 +275,15 @@ export class Workspace {
             () => undefined,
           );
         },
+        onUploadPaste: (s) => void this.pasteUpload(s),
+        osc52Policy: (s) => this.host(s.hostId)?.osc52 ?? 'ask',
+        onRememberOsc52: (s, policy) => {
+          if (s.hostId) void this.setOsc52(s.hostId, policy);
+        },
+        onClipboardWritten: (_s, text) =>
+          this.notices.notice('Copied to clipboard', 'success', {
+            detail: `${text.length.toLocaleString()} characters from the server`,
+          }),
       },
     });
     session.subscribe(() => this.changed());
@@ -385,6 +440,7 @@ export class Workspace {
 
   /** Closes one terminal (tmux keeps running on the host); its tab goes when empty. */
   closeTerm(tag: string): void {
+    if (this.files?.target.kind === 'terminal' && this.files.target.tag === tag) this.files = null;
     const session = this.terms.get(tag);
     session?.dispose();
     this.terms.delete(tag);
@@ -694,6 +750,206 @@ export class Workspace {
     probe.dispose();
     this.probes = this.probes.filter((p) => p !== probe);
     this.changed();
+  }
+
+  /* ----- Files, uploads and image paste ------------------------------------ */
+
+  /** A connected session id for the target: the terminal's, or the host's link. */
+  async sessionFor(target: FilesTarget): Promise<string> {
+    if (target.kind === 'terminal') {
+      const session = this.terms.get(target.tag);
+      const id = session?.id;
+      if (!session || !id || session.getSnapshot().state !== 'connected') {
+        throw new Error('The terminal is not connected');
+      }
+      return id;
+    }
+    return this.link(target.hostId).ready();
+  }
+
+  /** The shell-less connection to a host, started on first use. */
+  link(hostId: string): HostLink {
+    const existing = this.links.get(hostId);
+    if (existing && !existing.disposedNow) return existing;
+    const link = new HostLink(this.api, this.events, hostId);
+    link.subscribe(() => this.changed());
+    this.links.set(hostId, link);
+    void link.start();
+    this.changed();
+    return link;
+  }
+
+  /** Closes a host's link once nothing uses it (no file browser, no forwards). */
+  releaseLink(hostId: string): void {
+    const link = this.links.get(hostId);
+    if (!link) return;
+    const browsing = this.files?.target.kind === 'link' && this.files.target.hostId === hostId;
+    const forwarding = link.sessionId !== null && this.forwardsBySession.has(link.sessionId);
+    if (browsing || forwarding) return;
+    link.dispose();
+    this.links.delete(hostId);
+    this.changed();
+  }
+
+  /** The tmux pane folder of a terminal, when the host reported it. */
+  folderOf(session: TerminalSession): string | null {
+    const tmux = session.getSnapshot().tmux;
+    if (!tmux || !session.hostId) return null;
+    const found = this.found.get(session.hostId)?.sessions.find((s) => s.name === tmux);
+    return found?.path.startsWith('/') ? found.path : null;
+  }
+
+  openFilesForTerminal(tag: string): void {
+    const session = this.terms.get(tag);
+    if (!session) return;
+    if (session.hostId) this.listSessions(session.hostId);
+    this.files = {
+      target: { kind: 'terminal', tag },
+      hostId: session.hostId,
+      title: this.hostNameOf(session),
+      start: this.folderOf(session),
+    };
+    this.changed();
+  }
+
+  openFilesForHost(hostId: string): void {
+    const host = this.host(hostId);
+    if (!host) return;
+    this.link(hostId);
+    this.files = { target: { kind: 'link', hostId }, hostId, title: host.name, start: null };
+    this.changed();
+  }
+
+  closeFiles(): void {
+    const files = this.files;
+    this.files = null;
+    this.changed();
+    if (files?.target.kind === 'link') this.releaseLink(files.target.hostId);
+    this.activeSession()?.focus();
+  }
+
+  /** Ctrl+V of an image or copied files: upload to the host's upload folder, type the paths. */
+  private async pasteUpload(session: TerminalSession) {
+    const sessionId = session.id;
+    if (!sessionId) return;
+    const notice = this.notices.notice('Uploading from the clipboard', 'progress', {
+      progress: null,
+    });
+    try {
+      const { kind, paths, transfers } = await call('files.pasteClipboard', { sessionId });
+      this.notices.dropTransfers(transfers);
+      if (kind === 'none' || paths.length === 0) {
+        this.notices.update(notice, { kind: 'info', text: 'Nothing to paste', progress: null });
+        return;
+      }
+      session.typePaste(typedPaths(paths, this.host(session.hostId)?.os ?? 'linux'));
+      this.notices.update(notice, {
+        kind: 'success',
+        text: kind === 'image' ? 'Image uploaded — path pasted' : 'Files uploaded — paths pasted',
+        detail: paths.join('  '),
+        progress: 1,
+      });
+    } catch (error) {
+      this.notices.update(notice, {
+        kind: 'error',
+        text: 'Upload from the clipboard failed',
+        detail: messageOf(error),
+        progress: null,
+      });
+    }
+  }
+
+  /** Files dropped on a terminal: to its program's folder (inside the roots), else the upload folder. */
+  async uploadDropped(session: TerminalSession, files: File[]): Promise<void> {
+    const sessionId = session.id;
+    if (!sessionId || session.getSnapshot().state !== 'connected') {
+      this.notices.notice('The terminal is not connected', 'error');
+      return;
+    }
+    const grants = await this.api.grantFiles(files).catch(() => []);
+    if (grants.length === 0) {
+      this.notices.notice('Only files can be uploaded (no folders)', 'error');
+      return;
+    }
+    const folder = this.folderOf(session);
+    const roots = this.host(session.hostId)?.fileRoots ?? [];
+    try {
+      await call('files.upload', {
+        sessionId,
+        directory: folder && insideRoots(folder, roots) ? folder : null,
+        grants: grants.map((g) => g.token),
+        conflict: 'rename',
+        wait: false,
+      });
+    } catch (error) {
+      this.notices.notice('Upload failed', 'error', { detail: messageOf(error) });
+    }
+  }
+
+  async setOsc52(hostId: string, policy: Osc52Policy): Promise<void> {
+    try {
+      const saved = await call('hosts.setOsc52', { id: hostId, policy });
+      this.setHosts(this.hosts.map((h) => (h.id === saved.id ? saved : h)));
+    } catch (error) {
+      this.notices.notice('Could not save the clipboard choice', 'error', {
+        detail: messageOf(error),
+      });
+    }
+  }
+
+  /** Appends a vault key to the host's authorized_keys (over any connection to it). */
+  async installKey(hostId: string, keyId: string): Promise<{ added: boolean; path: string }> {
+    const usedLink = !this.links.has(hostId);
+    try {
+      const sessionId = await this.sessionOnHost(hostId);
+      return await call('keys.install', { sessionId, keyId });
+    } finally {
+      if (usedLink) this.releaseLink(hostId);
+    }
+  }
+
+  /* ----- Port forwards ----------------------------------------------------- */
+
+  allForwards(): ForwardInfo[] {
+    return [...this.forwardsBySession.values()].flat();
+  }
+
+  /** A connected session to the host: an open terminal, else its link. */
+  private async sessionOnHost(hostId: string): Promise<string> {
+    const live = [...this.terms.values()].find(
+      (s) => s.hostId === hostId && s.getSnapshot().state === 'connected' && s.id,
+    );
+    if (live?.id) return live.id;
+    return this.link(hostId).ready();
+  }
+
+  async startSavedForward(hostId: string, saved: SavedForward): Promise<void> {
+    const sessionId = await this.sessionOnHost(hostId);
+    const { id, auto: _auto, label: _label, ...spec } = saved;
+    await call('forwards.start', { sessionId, spec, savedId: id });
+  }
+
+  async startForward(target: FilesTarget, spec: ForwardSpec): Promise<ForwardInfo> {
+    const sessionId = await this.sessionFor(target);
+    return call('forwards.start', { sessionId, spec });
+  }
+
+  async stopForward(forward: ForwardInfo): Promise<void> {
+    await call('forwards.stop', { sessionId: forward.sessionId, id: forward.id });
+    // A link kept only for this forward can go.
+    for (const [hostId, link] of this.links) {
+      if (link.sessionId === forward.sessionId) {
+        setTimeout(() => this.releaseLink(hostId), 0);
+      }
+    }
+  }
+
+  /** Where a forward runs, for the status list. */
+  forwardOwner(forward: ForwardInfo): string {
+    const term = [...this.terms.values()].find((s) => s.id === forward.sessionId);
+    if (term) return this.nameOf(term);
+    const host = this.host(forward.hostId);
+    return host ? `${host.name} (background)` : 'Quick connect';
   }
 
   /* ----- Dock rows --------------------------------------------------------- */

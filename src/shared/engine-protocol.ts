@@ -22,6 +22,7 @@ import {
   PinInfo,
   Port,
   PromptAnswer,
+  RemotePath,
   ResizeMessage,
   Secret,
   SessionId,
@@ -118,6 +119,41 @@ export const EngineCalls = {
   'sshConfig.import': AppCalls['sshConfig.import'],
   'ui.get': AppCalls['ui.get'],
   'ui.save': AppCalls['ui.save'],
+  'hosts.setOsc52': AppCalls['hosts.setOsc52'],
+  'files.list': AppCalls['files.list'],
+  'files.mkdir': AppCalls['files.mkdir'],
+  'files.rename': AppCalls['files.rename'],
+  'files.delete': AppCalls['files.delete'],
+  /** Local files main resolved from grants (or wrote from the clipboard). */
+  'files.upload': {
+    params: obj({
+      sessionId: SessionId,
+      directory: Type.Union([RemotePath, Type.Null()]),
+      files: Type.Array(
+        obj({ path: FilePath, name: Type.String({ minLength: 1, maxLength: 255 }) }),
+        { minItems: 1, maxItems: 100 },
+      ),
+      conflict: AppCalls['files.upload'].params.properties.conflict,
+      wait: Type.Boolean(),
+    }),
+    result: AppCalls['files.upload'].result,
+  },
+  /** Into a local folder chosen in main's dialog. */
+  'files.download': {
+    params: obj({
+      sessionId: SessionId,
+      paths: AppCalls['files.download'].params.properties.paths,
+      folder: FilePath,
+    }),
+    result: AppCalls['files.download'].result,
+  },
+  'transfers.cancel': AppCalls['transfers.cancel'],
+  'transfers.resume': AppCalls['transfers.resume'],
+  'forwards.start': AppCalls['forwards.start'],
+  'forwards.stop': AppCalls['forwards.stop'],
+  'forwards.list': AppCalls['forwards.list'],
+  'agent.list': AppCalls['agent.list'],
+  'keys.install': AppCalls['keys.install'],
 } as const satisfies Record<string, { params: TSchema; result: TSchema }>;
 
 export type EngineMethod = keyof typeof EngineCalls;
@@ -144,6 +180,23 @@ export const EngineCommand = Type.Union([
   obj({ type: Type.Literal('shutdown') }),
 ]);
 export type EngineCommand = Static<typeof EngineCommand>;
+
+/** Calls that may take long (SFTP, forwards, agents): run at once, not after the calls before them. */
+export const CONCURRENT_CALLS: ReadonlySet<string> = new Set([
+  'files.list',
+  'files.mkdir',
+  'files.rename',
+  'files.delete',
+  'files.upload',
+  'files.download',
+  'transfers.cancel',
+  'transfers.resume',
+  'forwards.start',
+  'forwards.stop',
+  'forwards.list',
+  'agent.list',
+  'keys.install',
+]);
 
 /** Engine → main messages that are not session events. */
 export type EngineReply =

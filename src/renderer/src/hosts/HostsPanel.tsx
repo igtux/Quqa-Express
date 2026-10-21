@@ -1,8 +1,8 @@
 /**
  * The hosts screen (the SSH Manager): a compact status line, search and
- * group filter, collapsible groups, host cards with Open Terminal, Sessions,
- * Edit, Duplicate, Ping, favorite and Delete; Add host, Quick Connect and
- * the ~/.ssh/config import.
+ * group filter, collapsible groups, host cards with Open Terminal, Files,
+ * Sessions, Install key, Edit, Duplicate, Ping, favorite and Delete; Add
+ * host, Quick Connect and the ~/.ssh/config import.
  *
  * Ported from Jarvis NG (apps/web/src/machines/SshManager.tsx, host cards,
  * latency cached 20 s, Ping all; groups from legacy-ui 03a §5.4), same owner.
@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { HostInfo, KeyInfo } from '../../../shared/ipc.js';
-import { call, messageOf } from '../api.js';
+import { call, errorText, messageOf } from '../api.js';
 import { Dialog } from '../components/Dialog.js';
 import { Icon } from '../components/icons.js';
 import { formatIdle } from '../terminal/dockModel.js';
@@ -63,6 +63,7 @@ export function HostsPanel({
   const [deleting, setDeleting] = useState<HostInfo | null>(null);
   const [importing, setImporting] = useState(false);
   const [found, setFound] = useState<HostInfo | null>(null);
+  const [installing, setInstalling] = useState<HostInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const ping = useCallback(async (ids: string[]) => {
@@ -250,6 +251,8 @@ export function HostsPanel({
                         favorite={workspace.isHostFavorite(host.id)}
                         detached={host.tmux ? workspace.detachedOn(host.id).length : 0}
                         onOpen={() => openTerminal(host)}
+                        onFiles={() => workspace.openFilesForHost(host.id)}
+                        onInstallKey={() => setInstalling(host)}
                         onSessions={() => {
                           setFound(host);
                           workspace.listSessions(host.id);
@@ -314,6 +317,14 @@ export function HostsPanel({
       )}
       {importing && <SshConfigImport onClose={() => setImporting(false)} onImported={onChange} />}
       {found && <HostSessions host={found} workspace={workspace} onClose={() => setFound(null)} />}
+      {installing && (
+        <InstallKey
+          host={installing}
+          keys={keys}
+          workspace={workspace}
+          onClose={() => setInstalling(null)}
+        />
+      )}
     </section>
   );
 }
@@ -326,6 +337,8 @@ function HostCard({
   favorite,
   detached,
   onOpen,
+  onFiles,
+  onInstallKey,
   onSessions,
   onEdit,
   onDuplicate,
@@ -340,6 +353,8 @@ function HostCard({
   favorite: boolean;
   detached: number;
   onOpen(): void;
+  onFiles(): void;
+  onInstallKey(): void;
   onSessions(): void;
   onEdit(): void;
   onDuplicate(): void;
@@ -399,6 +414,15 @@ function HostCard({
         >
           <Icon name="terminal" />
         </button>
+        <button
+          type="button"
+          className="ssh-card-btn"
+          title="Files (SFTP)"
+          aria-label={`Files on ${host.name}`}
+          onClick={onFiles}
+        >
+          <Icon name="folder" />
+        </button>
         {host.tmux && (
           <button
             type="button"
@@ -430,6 +454,17 @@ function HostCard({
         >
           <Icon name="activity" />
         </button>
+        {host.os === 'linux' && (
+          <button
+            type="button"
+            className="ssh-card-btn"
+            title="Install a public key on this host"
+            aria-label={`Install a key on ${host.name}`}
+            onClick={onInstallKey}
+          >
+            <Icon name="key" />
+          </button>
+        )}
         <button
           type="button"
           className="ssh-card-btn"
@@ -459,6 +494,110 @@ function HostCard({
         </button>
       </div>
     </li>
+  );
+}
+
+/**
+ * "Install my public key on this host": appends a vault key to
+ * ~/.ssh/authorized_keys over SFTP (once; nothing changes if it is there).
+ */
+function InstallKey({
+  host,
+  keys,
+  workspace,
+  onClose,
+}: {
+  host: HostInfo;
+  keys: KeyInfo[];
+  workspace: Workspace;
+  onClose(): void;
+}) {
+  const [keyId, setKeyId] = useState(
+    host.auth.kind === 'key' ? host.auth.keyId : (keys[0]?.id ?? ''),
+  );
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [useAfter, setUseAfter] = useState(host.auth.kind === 'password');
+  const key = keys.find((k) => k.id === keyId);
+  return (
+    <Dialog
+      title={`Install a key on ${host.name}?`}
+      onClose={onClose}
+      submitLabel="Install key"
+      busy={busy}
+      submitDisabled={!key}
+      onSubmit={() => {
+        if (!key) return;
+        setBusy(true);
+        setProblem(null);
+        workspace.installKey(host.id, key.id).then(
+          async (result) => {
+            workspace.notices.notice(
+              result.added
+                ? `Key installed on ${host.name}`
+                : `The key was already on ${host.name}`,
+              'success',
+              { detail: result.path },
+            );
+            if (useAfter && host.auth.kind !== 'key') {
+              const { id: _id, createdAt: _c, lastUsedAt: _l, connectCount: _n, ...input } = host;
+              await call('hosts.save', {
+                id: host.id,
+                host: { ...input, auth: { kind: 'key', keyId: key.id } },
+              }).then(
+                (saved) =>
+                  workspace.setHosts(workspace.hosts.map((h) => (h.id === saved.id ? saved : h))),
+                () => undefined,
+              );
+            }
+            onClose();
+          },
+          (error: unknown) => {
+            setBusy(false);
+            setProblem(errorText(error));
+          },
+        );
+      }}
+    >
+      {keys.length === 0 ? (
+        <p className="system-hint">Generate or import a key under Keys first.</p>
+      ) : (
+        <>
+          <p className="system-hint">
+            The public key is added to <code>~/.ssh/authorized_keys</code> of {host.username} on{' '}
+            {host.name} (the folder and file are created with safe permissions if missing). If it is
+            already there, nothing changes.
+          </p>
+          <select
+            aria-label="Key to install"
+            className="system-input"
+            value={keyId}
+            onChange={(e) => setKeyId(e.target.value)}
+          >
+            {keys.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.label} ({k.algorithm}, {k.fingerprint.slice(7, 19)}…)
+              </option>
+            ))}
+          </select>
+          {host.auth.kind !== 'key' && (
+            <label className="system-check">
+              <input
+                type="checkbox"
+                checked={useAfter}
+                onChange={(e) => setUseAfter(e.target.checked)}
+              />
+              <span>Log in to {host.name} with this key from now on</span>
+            </label>
+          )}
+        </>
+      )}
+      {problem && (
+        <p className="system-error" role="alert">
+          {problem}
+        </p>
+      )}
+    </Dialog>
   );
 }
 

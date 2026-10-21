@@ -9,10 +9,11 @@
  * the key-encryption key from (docs/adr/0002-vault.md).
  */
 import { randomBytes } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { dialog, powerMonitor, safeStorage, type BrowserWindow } from 'electron';
+import { fileURLToPath } from 'node:url';
+import { app, clipboard, dialog, powerMonitor, safeStorage, type BrowserWindow } from 'electron';
 import Value from 'typebox/value';
 import type { EngineVaultStatus } from '../shared/engine-protocol.js';
 import {
@@ -25,6 +26,7 @@ import {
   type VaultStatus,
 } from '../shared/ipc.js';
 import type { EngineHost } from './engine-host.js';
+import type { Grants } from './grants.js';
 
 type Result = CallResult<unknown>;
 
@@ -40,6 +42,8 @@ export interface BrokerDeps {
   window(): BrowserWindow | null;
   /** True if `requestId` (a host-key-changed token) belongs to a session of the caller. */
   ownsChange(requestId: string): boolean;
+  /** Files the user picked or dropped, by token. */
+  grants: Grants;
   /** Test hook: pretend the OS key store is missing. */
   forceNoOsKeyStore?: boolean;
 }
@@ -255,7 +259,131 @@ export class VaultBroker {
         return engine.call('ui.get', {});
       case 'ui.save':
         return engine.call('ui.save', raw as CallParams<'ui.save'>);
+      case 'hosts.setOsc52':
+        return engine.call('hosts.setOsc52', raw as CallParams<'hosts.setOsc52'>);
+      case 'files.list':
+        return engine.call('files.list', raw as CallParams<'files.list'>);
+      case 'files.mkdir':
+        return engine.call('files.mkdir', raw as CallParams<'files.mkdir'>);
+      case 'files.rename':
+        return engine.call('files.rename', raw as CallParams<'files.rename'>);
+      case 'files.delete':
+        return engine.call('files.delete', raw as CallParams<'files.delete'>);
+      case 'files.pickUpload': {
+        const window = this.deps.window();
+        const options = {
+          title: 'Upload files',
+          properties: ['openFile', 'multiSelections', 'dontAddToRecent'] as (
+            'openFile' | 'multiSelections' | 'dontAddToRecent'
+          )[],
+        };
+        const choice = window
+          ? await dialog.showOpenDialog(window, options)
+          : await dialog.showOpenDialog(options);
+        if (choice.canceled) return { ok: true, value: { files: [] } };
+        return { ok: true, value: { files: await this.deps.grants.grant(choice.filePaths) } };
+      }
+      case 'files.upload': {
+        const { grants, ...params } = raw as CallParams<'files.upload'>;
+        const files = this.deps.grants.resolve(grants);
+        if (!files) return fail('not_found', 'The chosen files have expired; choose them again');
+        return engine.call('files.upload', { ...params, files });
+      }
+      case 'files.pasteClipboard':
+        return this.pasteClipboard((raw as CallParams<'files.pasteClipboard'>).sessionId);
+      case 'files.download': {
+        const params = raw as CallParams<'files.download'>;
+        const window = this.deps.window();
+        const options = {
+          title:
+            params.paths.length === 1
+              ? 'Download to…'
+              : `Download ${params.paths.length} files to…`,
+          defaultPath: app.getPath('downloads'),
+          buttonLabel: 'Download here',
+          properties: ['openDirectory', 'createDirectory', 'dontAddToRecent'] as (
+            'openDirectory' | 'createDirectory' | 'dontAddToRecent'
+          )[],
+        };
+        const choice = window
+          ? await dialog.showOpenDialog(window, options)
+          : await dialog.showOpenDialog(options);
+        const folder = choice.filePaths[0];
+        if (choice.canceled || !folder) return { ok: true, value: { started: [] } };
+        return engine.call('files.download', { ...params, folder });
+      }
+      case 'transfers.cancel':
+        return engine.call('transfers.cancel', raw as CallParams<'transfers.cancel'>);
+      case 'transfers.resume':
+        return engine.call('transfers.resume', raw as CallParams<'transfers.resume'>);
+      case 'forwards.start':
+        return engine.call('forwards.start', raw as CallParams<'forwards.start'>);
+      case 'forwards.stop':
+        return engine.call('forwards.stop', raw as CallParams<'forwards.stop'>);
+      case 'forwards.list':
+        return engine.call('forwards.list', {});
+      case 'agent.list':
+        return engine.call('agent.list', raw as CallParams<'agent.list'>);
+      case 'keys.install':
+        return engine.call('keys.install', raw as CallParams<'keys.install'>);
     }
+  }
+
+  /**
+   * Image paste: main reads the clipboard itself (the page never handles the
+   * bytes). An image is written to a private temporary file and uploaded as
+   * `clipboard_<time>.png`; copied files (Windows Explorer, or a file URI list)
+   * are uploaded as they are. The engine answers once the uploads are done.
+   */
+  private async pasteClipboard(sessionId: string): Promise<Result> {
+    const found = await readClipboardUpload();
+    if (found.kind === 'image') {
+      const folder = await mkdtemp(join(tmpdir(), 'quqa-paste-'));
+      try {
+        const name = `clipboard_${Date.now()}.${found.ext}`;
+        const path = join(folder, name);
+        await writeFile(path, found.bytes, { mode: 0o600 });
+        const uploaded = await this.deps.engine.call('files.upload', {
+          sessionId,
+          directory: null,
+          files: [{ path, name }],
+          conflict: 'rename',
+          wait: true,
+        });
+        return uploaded.ok
+          ? {
+              ok: true,
+              value: {
+                kind: 'image',
+                paths: uploaded.value.paths,
+                transfers: uploaded.value.started.map((t) => t.id),
+              },
+            }
+          : uploaded;
+      } finally {
+        await rm(folder, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+    const granted = found.kind === 'files' ? await this.deps.grants.grant(found.paths) : [];
+    const files = this.deps.grants.resolve(granted.map((g) => g.token)) ?? [];
+    if (files.length === 0) return { ok: true, value: { kind: 'none', paths: [], transfers: [] } };
+    const uploaded = await this.deps.engine.call('files.upload', {
+      sessionId,
+      directory: null,
+      files: files.slice(0, 100),
+      conflict: 'rename',
+      wait: true,
+    });
+    return uploaded.ok
+      ? {
+          ok: true,
+          value: {
+            kind: 'files',
+            paths: uploaded.value.paths,
+            transfers: uploaded.value.started.map((t) => t.id),
+          },
+        }
+      : uploaded;
   }
 
   private async status(): Promise<Result> {
@@ -324,6 +452,75 @@ export class VaultBroker {
       : await dialog.showOpenDialog(options);
     return choice.canceled ? null : (choice.filePaths[0] ?? null);
   }
+}
+
+const IMAGE_TYPES: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+};
+const MAX_PASTED_IMAGE_BYTES = 64 * 1024 * 1024;
+/** Windows Explorer's list of copied files (UTF-16, NUL-separated). */
+const FILE_NAME_W = 'electron application/osclipboard;format="FileNameW"';
+
+type ClipboardUpload =
+  | { kind: 'image'; bytes: Buffer; ext: string }
+  | { kind: 'files'; paths: string[] }
+  | { kind: 'none' };
+
+/** An image on the clipboard, or files copied in the system file manager. */
+async function readClipboardUpload(): Promise<ClipboardUpload> {
+  let items: Awaited<ReturnType<typeof clipboard.read>>;
+  try {
+    items = await clipboard.read();
+  } catch {
+    return { kind: 'none' };
+  }
+  for (const item of items) {
+    const type = item.types.find((t) => t in IMAGE_TYPES);
+    if (!type) continue;
+    try {
+      const blob = (await item.getType(type)) as Blob;
+      if (blob.size === 0 || blob.size > MAX_PASTED_IMAGE_BYTES) continue;
+      return {
+        kind: 'image',
+        bytes: Buffer.from(await blob.arrayBuffer()),
+        ext: IMAGE_TYPES[type] ?? 'png',
+      };
+    } catch {
+      // Gone meanwhile.
+    }
+  }
+  const paths: string[] = [];
+  for (const item of items) {
+    if (process.platform === 'win32') {
+      try {
+        const blob = (await item.getType(FILE_NAME_W)) as Blob;
+        const text = Buffer.from(await blob.arrayBuffer()).toString('utf16le');
+        paths.push(...text.split('\0').filter((p) => p.length > 0));
+      } catch {
+        // No copied files.
+      }
+    }
+    if (paths.length === 0 && item.types.includes('text/uri-list')) {
+      try {
+        const list = await ((await item.getType('text/uri-list')) as Blob).text();
+        for (const line of list.split(/\r?\n/)) {
+          if (!line.startsWith('file://')) continue;
+          try {
+            paths.push(fileURLToPath(line.trim()));
+          } catch {
+            // Not a local file URI.
+          }
+        }
+      } catch {
+        // Gone meanwhile.
+      }
+    }
+  }
+  return paths.length > 0 ? { kind: 'files', paths: paths.slice(0, 100) } : { kind: 'none' };
 }
 
 /** A fresh OS key and its safeStorage encryption (Electron's DPAPI / Keychain / libsecret). */

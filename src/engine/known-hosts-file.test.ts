@@ -4,12 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { describeHostKey } from './host-keys.js';
 import { hashedMatches, knownHostsName, parseKnownHosts } from './known-hosts-file.js';
 import { KnownHosts } from './known-hosts.js';
+import { ed25519Pair } from '../../test/keypair.js';
 
 const { utils } = ssh2;
 
 /** A fresh host key, as known_hosts would hold it. */
 function hostKey() {
-  const parsed = utils.parseKey(utils.generateKeyPairSync('ed25519').public);
+  const parsed = utils.parseKey(ed25519Pair().public);
   if (parsed instanceof Error || Array.isArray(parsed)) throw new Error('bad key');
   const blob = parsed.getPublicSSH();
   return { blob, line: `ssh-ed25519 ${blob.toString('base64')}` };

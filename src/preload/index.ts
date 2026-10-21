@@ -2,7 +2,7 @@
  * The only bridge between the page and the app: a handful of typed intents.
  * No Node or Electron objects reach the page; main validates every message.
  */
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron';
 import { Channel } from '../shared/protocol.js';
 import type { QuqaApi, SessionEvent, VaultState } from '../shared/ipc.js';
 
@@ -43,6 +43,19 @@ const api: QuqaApi = {
     };
   },
   toggleFullScreen: () => ipcRenderer.send(Channel.fullScreen, null),
+  grantFiles: async (files) => {
+    // Only a real dropped file has a path; anything else gives '' or throws.
+    const paths: string[] = [];
+    for (const file of Array.from(files).slice(0, 100)) {
+      try {
+        const path = webUtils.getPathForFile(file);
+        if (path) paths.push(path);
+      } catch {
+        // Not a File.
+      }
+    }
+    return paths.length === 0 ? [] : ipcRenderer.invoke(Channel.grantFiles, paths);
+  },
   testHooks: process.argv.includes('--quqa-test-hooks'),
 };
 

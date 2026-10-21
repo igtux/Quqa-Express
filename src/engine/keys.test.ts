@@ -9,6 +9,7 @@ import { KeyInfo } from '../shared/ipc.js';
 import { fingerprintOf } from './host-keys.js';
 import { generateEd25519, KeyStore, sanitiseComment } from './keys.js';
 import { Vault } from './vault/vault.js';
+import { ed25519Pair } from '../../test/keypair.js';
 
 const { utils } = ssh2;
 
@@ -58,7 +59,7 @@ describe('key generation', () => {
 
 describe('key import', () => {
   it('imports an OpenSSH key', async () => {
-    const pair = utils.generateKeyPairSync('ed25519', { comment: 'x' });
+    const pair = ed25519Pair({ comment: 'x' });
     const info = await keys.import('imported', pair.private, undefined, false);
     expect(info.publicKey.split(' ').slice(0, 2).join(' ')).toBe(
       pair.public.split(' ').slice(0, 2).join(' '),
@@ -76,7 +77,7 @@ describe('key import', () => {
   });
 
   it('needs the passphrase of a protected key and can save it or not', async () => {
-    const pair = utils.generateKeyPairSync('ed25519', {
+    const pair = ed25519Pair({
       passphrase: 'open sesame',
       cipher: 'aes256-ctr',
       rounds: 16,
@@ -101,7 +102,7 @@ describe('key import', () => {
   });
 
   it('refuses public keys and garbage', async () => {
-    const pair = utils.generateKeyPairSync('ed25519');
+    const pair = ed25519Pair();
     await expect(keys.import('pub', pair.public, undefined, false)).rejects.toMatchObject({
       code: 'invalid_key',
     });

@@ -5,7 +5,8 @@
  *
  * Fields follow Jarvis NG's host form (apps/web/src/machines/HostForms.tsx),
  * same owner, plus what a single-user desktop needs: groups, tags, notes,
- * colour, the tmux switch, per-host look and the jump-host placeholder.
+ * colour, the tmux switch, per-host look, the jump host, agent forwarding,
+ * file roots, the upload folder, the OSC 52 decision and saved port forwards.
  */
 import { randomBytes } from 'node:crypto';
 import Value from 'typebox/value';
@@ -34,6 +35,17 @@ export const DEFAULT_UI: UiStateType = {
   layout: { tabs: [], active: -1 },
 };
 
+/** Fields added after a host was first saved get these values. */
+export const HOST_DEFAULTS = {
+  jumpHostId: null,
+  proxyJump: '',
+  agentForward: false,
+  fileRoots: [],
+  uploadDir: '',
+  osc52: 'ask',
+  forwards: [],
+} as const satisfies Partial<HostInput>;
+
 export class HostStore {
   constructor(
     private readonly vault: Vault,
@@ -44,7 +56,7 @@ export class HostStore {
   list(): HostInfoType[] {
     return this.vault
       .list<HostInfoType>('host')
-      .map(({ id, value }) => ({ ...value, id }))
+      .map(({ id, value }) => ({ ...HOST_DEFAULTS, ...value, id }))
       .filter((host) => Value.Check(HostInfo, host))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
   }
@@ -52,7 +64,7 @@ export class HostStore {
   get(id: string): HostInfoType | null {
     const host = this.vault.get<HostInfoType>('host', id);
     if (!host) return null;
-    const value = { ...host, id };
+    const value = { ...HOST_DEFAULTS, ...host, id };
     return Value.Check(HostInfo, value) ? value : null;
   }
 
@@ -72,6 +84,9 @@ export class HostStore {
     }
     if (host.jumpHostId !== null && !this.get(host.jumpHostId)) {
       throw new CallError('not_found', 'The jump host is no longer saved');
+    }
+    if (id !== undefined && host.jumpHostId !== null && this.jumpsThrough(host.jumpHostId, id)) {
+      throw new CallError('invalid_request', 'That jump host already connects through this host');
     }
     let saved: HostInfoType;
     if (id === undefined) {
@@ -109,6 +124,25 @@ export class HostStore {
       }
     }
     return host;
+  }
+
+  /** True if `from`'s chain of jump hosts reaches `target`. */
+  private jumpsThrough(from: string, target: string): boolean {
+    const seen = new Set<string>();
+    for (let id: string | null = from; id !== null; id = this.get(id)?.jumpHostId ?? null) {
+      if (id === target) return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+    }
+    return false;
+  }
+
+  /** Remembers what this host's programs may do with the clipboard. */
+  async setOsc52(id: string, policy: HostInput['osc52']): Promise<HostInfoType> {
+    const host = this.require(id);
+    const saved = { ...host, osc52: policy };
+    await this.vault.put('host', id, withoutId(saved));
+    return saved;
   }
 
   /** A terminal to the host opened: count it and remember when. */
@@ -152,14 +186,33 @@ export class HostStore {
 
 function normalise(input: HostInput): HostInput {
   const tags = [...new Set(input.tags.map((tag) => tag.toLowerCase()))].sort();
+  const roots = [...new Set(input.fileRoots.map(normaliseRoot))];
+  const ids = new Set<string>();
+  for (const forward of input.forwards) {
+    if (ids.has(forward.id)) throw new CallError('invalid_request', 'Two forwards share an id');
+    ids.add(forward.id);
+  }
   return {
     ...input,
+    fileRoots: roots.includes('/') ? [] : roots,
+    uploadDir: input.uploadDir.trim(),
     name: input.name.trim() || input.address,
     group: input.group.trim(),
     tags,
     notes: input.notes.replace(/\r\n/g, '\n'),
     address: input.address.replace(/^\[(.*)\]$/, '$1'),
   };
+}
+
+/** `/srv//app/` → `/srv/app`. */
+function normaliseRoot(path: string): string {
+  const parts: string[] = [];
+  for (const part of path.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join('/')}`;
 }
 
 function withoutId(host: HostInfoType): Omit<HostInfoType, 'id'> {

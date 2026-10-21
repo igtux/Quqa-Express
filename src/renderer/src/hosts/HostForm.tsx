@@ -1,8 +1,10 @@
 /**
- * Add / Edit Host: name, address, port, user, login (key from the vault or
- * password), type, group, tags, colour, resumable sessions (tmux), terminal
- * look, jump host (stored for Phase 4) and notes. The form holds no secret:
- * a password login asks when connecting (or uses the saved password).
+ * Add / Edit Host: name, address, port, user, login (key from the vault,
+ * the SSH agent, or password), type, group, tags, colour, resumable sessions
+ * (tmux), terminal look, jump host, agent forwarding, file roots and upload
+ * folder, the clipboard (OSC 52) choice, saved port forwards and notes. The
+ * form holds no secret: a password login asks when connecting (or uses the
+ * saved password).
  *
  * Modelled on Jarvis NG's host forms (apps/web/src/machines/HostForms.tsx),
  * same owner.
@@ -10,14 +12,27 @@
 import { useState } from 'react';
 import {
   HOST_PATTERN,
+  MAX_FILE_ROOTS,
+  MAX_SAVED_FORWARDS,
   TAG_PATTERN,
   USER_PATTERN,
+  type AgentKey,
+  type AgentSource,
   type HostInfo,
   type HostInput,
   type KeyInfo,
+  type SavedForward,
 } from '../../../shared/ipc.js';
 import { call, messageOf } from '../api.js';
 import { Dialog } from '../components/Dialog.js';
+import {
+  cleanForward,
+  describeForward,
+  EMPTY_FORWARD,
+  ForwardFields,
+  validateForward,
+} from '../components/Forwards.js';
+import { Icon } from '../components/icons.js';
 import { FONTS, SCHEMES } from '../terminal/themes.js';
 import { parseTags } from './hostModel.js';
 
@@ -34,6 +49,8 @@ export const HOST_COLORS = [
 ];
 
 const HOST_RE = new RegExp(HOST_PATTERN);
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u001f\u007f]/;
 const USER_RE = new RegExp(USER_PATTERN);
 const TAG_RE = new RegExp(TAG_PATTERN);
 
@@ -54,7 +71,34 @@ export const EMPTY_HOST: HostInput = {
   proxyJump: '',
   scheme: '',
   font: '',
+  // Off by default: a forwarded agent lets the host log in elsewhere as you.
+  agentForward: false,
+  fileRoots: [],
+  uploadDir: '',
+  osc52: 'ask',
+  forwards: [],
 };
+
+/** Is this platform likely to have Pageant (Windows)? */
+const WINDOWS = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+
+function newForwardId(): string {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return `f_${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/** One absolute folder per line; blank lines dropped. */
+export function parseRoots(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
 
 export function inputOf(host: HostInfo): HostInput {
   const {
@@ -85,6 +129,18 @@ export function validateHost(host: HostInput): string | null {
     return 'Tags are single words of up to 32 characters';
   if (host.group.length > 64) return 'The group name is too long';
   if (host.notes.length > 4000) return 'The notes are too long (4000 characters at most)';
+  if (host.fileRoots.length > MAX_FILE_ROOTS) return `At most ${MAX_FILE_ROOTS} file roots`;
+  if (host.fileRoots.some((root) => !root.startsWith('/') || CONTROL.test(root))) {
+    return 'File roots are absolute folders, one per line (e.g. /srv/app)';
+  }
+  if (host.uploadDir && (!/^(\/|~\/|~$)/.test(host.uploadDir) || CONTROL.test(host.uploadDir))) {
+    return 'The upload folder starts with / or ~/';
+  }
+  if (host.forwards.length > MAX_SAVED_FORWARDS) return `At most ${MAX_SAVED_FORWARDS} forwards`;
+  for (const forward of host.forwards) {
+    const problem = validateForward(forward);
+    if (problem) return `Port forward ${describeForward(forward)}: ${problem}`;
+  }
   return null;
 }
 
@@ -111,6 +167,8 @@ export function HostForm({
   const [host, setHost] = useState<HostInput>(initial);
   const [port, setPort] = useState(String(initial.port));
   const [tags, setTags] = useState(initial.tags.join(', '));
+  const [roots, setRoots] = useState(initial.fileRoots.join('\n'));
+  const [agentKeys, setAgentKeys] = useState<{ message: string; keys: AgentKey[] } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const set = (change: Partial<HostInput>) => setHost((current) => ({ ...current, ...change }));
@@ -127,6 +185,9 @@ export function HostForm({
       group: host.group.trim(),
       port: Number(port),
       tags: parseTags(tags),
+      fileRoots: parseRoots(roots),
+      uploadDir: host.uploadDir.trim(),
+      forwards: host.forwards.map((f) => ({ ...f, ...cleanForward(f), label: f.label.trim() })),
     };
     const invalid = validateHost(value);
     if (invalid) return setProblem(invalid);
@@ -218,8 +279,58 @@ export function HostForm({
             >
               Key from the vault
             </button>
+            <button
+              type="button"
+              aria-pressed={host.auth.kind === 'agent'}
+              onClick={() => set({ auth: { kind: 'agent', agent: 'system' } })}
+            >
+              SSH agent
+            </button>
           </div>
-          {host.auth.kind === 'key' ? (
+          {host.auth.kind === 'agent' ? (
+            <div className="agent-choice">
+              <select
+                aria-label="Agent"
+                className="system-input"
+                value={host.auth.agent}
+                onChange={(e) => {
+                  setAgentKeys(null);
+                  set({ auth: { kind: 'agent', agent: e.target.value as AgentSource } });
+                }}
+              >
+                <option value="system">
+                  {WINDOWS ? 'Windows OpenSSH agent' : 'System agent (SSH_AUTH_SOCK)'}
+                </option>
+                <option value="pageant">Pageant (PuTTY)</option>
+              </select>
+              <button
+                type="button"
+                className="system-btn ghost small"
+                onClick={() => {
+                  if (host.auth.kind !== 'agent') return;
+                  call('agent.list', { agent: host.auth.agent }).then(
+                    (found) => setAgentKeys(found),
+                    (error: unknown) => setAgentKeys({ message: messageOf(error), keys: [] }),
+                  );
+                }}
+              >
+                Show its keys
+              </button>
+              {agentKeys && (
+                <div className="agent-keys" data-testid="agent-keys">
+                  {agentKeys.message && <span className="system-hint">{agentKeys.message}</span>}
+                  {agentKeys.keys.map((key) => (
+                    <span key={key.fingerprint} className="item-mono">
+                      {key.algorithm} {key.fingerprint} {key.comment}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <span className="system-hint">
+                The agent signs the login; its keys never reach this app.
+              </span>
+            </div>
+          ) : host.auth.kind === 'key' ? (
             <select
               aria-label="Key"
               className="system-input"
@@ -363,9 +474,93 @@ export function HostForm({
             ))}
           </select>
           <span className="system-hint">
-            Saved now, used from a later version (jump hosts are not connected through yet).
-            {host.proxyJump && <> From ~/.ssh/config: ProxyJump {host.proxyJump}</>}
+            Connects through that host first (ProxyJump); each hop uses its own login and host key.
+            {host.proxyJump && host.jumpHostId === null && (
+              <>
+                {' '}
+                From ~/.ssh/config: ProxyJump {host.proxyJump} (used while no jump host is chosen).
+              </>
+            )}
           </span>
+        </div>
+        <label className="system-check span-2 warning-check">
+          <input
+            type="checkbox"
+            checked={host.agentForward}
+            onChange={(e) => set({ agentForward: e.target.checked })}
+          />
+          <span>
+            <Icon name="warning" /> Forward my SSH agent to this host. Anyone with root on the host
+            can then use your agent&apos;s keys while you are connected. Only for hosts you trust.
+          </span>
+        </label>
+        <div className="system-form-group span-2">
+          <label htmlFor="hf-roots">File roots</label>
+          <textarea
+            id="hf-roots"
+            className="system-textarea roots"
+            value={roots}
+            spellCheck={false}
+            placeholder={'Empty: the whole disk\n/srv/app\n/var/log'}
+            onChange={(e) => setRoots(e.target.value)}
+          />
+          <span className="system-hint">
+            The file browser and uploads stay inside these folders (symlinks are resolved first).
+          </span>
+        </div>
+        <div className="system-form-group">
+          <label htmlFor="hf-upload">Upload folder</label>
+          <input
+            id="hf-upload"
+            className="system-input"
+            value={host.uploadDir}
+            spellCheck={false}
+            placeholder="~/uploads"
+            onChange={(e) => set({ uploadDir: e.target.value })}
+          />
+        </div>
+        <div className="system-form-group">
+          <label htmlFor="hf-osc52">Programs copying to the clipboard</label>
+          <select
+            id="hf-osc52"
+            className="system-input"
+            value={host.osc52}
+            onChange={(e) => set({ osc52: e.target.value as HostInput['osc52'] })}
+          >
+            <option value="ask">Ask each time</option>
+            <option value="allow">Allow</option>
+            <option value="deny">Deny</option>
+          </select>
+        </div>
+        <div className="system-form-group span-2">
+          <span className="system-form-label">Port forwarding</span>
+          {host.forwards.map((forward, index) => (
+            <SavedForwardEditor
+              key={forward.id}
+              forward={forward}
+              index={index}
+              onChange={(next) =>
+                set({ forwards: host.forwards.map((f) => (f.id === forward.id ? next : f)) })
+              }
+              onRemove={() => set({ forwards: host.forwards.filter((f) => f.id !== forward.id) })}
+            />
+          ))}
+          {host.forwards.length < MAX_SAVED_FORWARDS && (
+            <button
+              type="button"
+              className="system-btn ghost small add-forward"
+              onClick={() =>
+                set({
+                  forwards: [
+                    ...host.forwards,
+                    { ...EMPTY_FORWARD, id: newForwardId(), auto: false, label: '' },
+                  ],
+                })
+              }
+            >
+              <Icon name="plus" /> Add a forward
+            </button>
+          )}
         </div>
         <div className="system-form-group span-2">
           <label htmlFor="hf-notes">Notes</label>
@@ -385,5 +580,54 @@ export function HostForm({
         </p>
       )}
     </Dialog>
+  );
+}
+
+function SavedForwardEditor({
+  forward,
+  index,
+  onChange,
+  onRemove,
+}: {
+  forward: SavedForward;
+  index: number;
+  onChange(forward: SavedForward): void;
+  onRemove(): void;
+}) {
+  return (
+    <div className="saved-forward" data-testid="saved-forward">
+      <div className="saved-forward-head">
+        <input
+          className="system-input"
+          aria-label="Forward name"
+          placeholder="Name (optional), e.g. database"
+          value={forward.label}
+          maxLength={64}
+          onChange={(e) => onChange({ ...forward, label: e.target.value })}
+        />
+        <label className="system-check">
+          <input
+            type="checkbox"
+            checked={forward.auto}
+            onChange={(e) => onChange({ ...forward, auto: e.target.checked })}
+          />
+          <span>Start automatically</span>
+        </label>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Remove this forward"
+          title="Remove"
+          onClick={onRemove}
+        >
+          <Icon name="trash" />
+        </button>
+      </div>
+      <ForwardFields
+        spec={forward}
+        idPrefix={`hf-fwd-${index}`}
+        onChange={(spec) => onChange({ ...forward, ...spec })}
+      />
+    </div>
   );
 }

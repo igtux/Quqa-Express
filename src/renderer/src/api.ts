@@ -25,3 +25,16 @@ export async function call<M extends AppMethod>(
 export function messageOf(error: unknown): string {
   return error instanceof AppError ? error.message : 'Something went wrong';
 }
+
+/** Like `messageOf`, but also shows the app's own errors (link and session messages). */
+export function errorText(error: unknown): string {
+  if (error instanceof AppError) return error.message;
+  if (
+    error instanceof Error &&
+    error.name === 'Error' &&
+    !error.message.startsWith('Error invoking')
+  ) {
+    return error.message;
+  }
+  return 'Something went wrong';
+}

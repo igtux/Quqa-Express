@@ -20,7 +20,8 @@ Free and open source under the Apache-2.0 licence.
 - Strict host keys: fingerprint prompt on first connect, changed keys
   blocked, known_hosts import.
 - SFTP file browser with resumable uploads and downloads; paste an image or
-  drop files to upload them; local port forwarding; jump hosts.
+  drop files to upload them; local, remote and SOCKS port forwarding; jump
+  hosts.
 - Careful clipboard: copy on select, chunked paste with cancel, paste
   warnings, OSC 52 writes only after you allow them.
 - Bell and "agent finished" notifications for long-running programs such as

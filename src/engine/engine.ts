@@ -15,11 +15,19 @@
  * checking, TCP_NODELAY, keepalives, error mapping. Unlike the gateway, an
  * unknown host key is shown to the user, who must accept it (trust on first
  * use); a changed key is refused until the user replaces the pin.
+ *
+ * A saved host may connect through jump hosts (jump.ts): every hop is a
+ * saved host with its own login and pinned key, reached with `forwardOut`
+ * over the hop before it. A connected session also carries SFTP (file
+ * browser, uploads, downloads: remote-files.ts, transfers.ts) and port
+ * forwards (forwards.ts); a `hold` session is a connection with no shell for
+ * just those.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
-import { basename } from 'node:path';
+import { basename, posix } from 'node:path';
+import type { Duplex } from 'node:stream';
 import ssh2, {
   type AuthHandlerMiddleware,
   type Client as SshClient,
@@ -27,6 +35,8 @@ import ssh2, {
   type ConnectConfig,
   type KeyboardInteractiveCallback,
   type Prompt,
+  type SFTPWrapper,
+  type ShellOptions,
 } from 'ssh2';
 import Value from 'typebox/value';
 import {
@@ -41,6 +51,7 @@ import {
   HOST_PATTERN,
   USER_PATTERN,
   type AdhocConnect,
+  type Auth,
   type ConnectRequest,
   type HostAction,
   type HostInfo,
@@ -52,7 +63,15 @@ import {
   type TmuxMessage,
 } from '../shared/ipc.js';
 import type { PromptKind, TmuxSessionInfo, VaultState } from '../shared/protocol.js';
+import { CONCURRENT_CALLS } from '../shared/engine-protocol.js';
+import { agentFor, listAgentKeys, locateAgent } from './agent.js';
+import { installAuthorizedKey } from './authorized-keys.js';
 import { CallError } from './errors.js';
+import { Forwards } from './forwards.js';
+import { JumpError, resolveChain } from './jump.js';
+import { RemoteFiles } from './remote-files.js';
+import { assertValidName } from './remote-paths.js';
+import { Transfers } from './transfers.js';
 import {
   describeHostKey,
   fingerprintOf,
@@ -95,6 +114,8 @@ export interface EngineOptions {
   maxSessions?: number;
   /** Argon2id parameters for new vault wraps (tests use small ones). */
   kdf?: KdfParams;
+  /** Tests only: bytes per second for each upload or download (0: unlimited). */
+  transferThrottle?: number;
 }
 
 /** Output not yet rendered by the terminal before the channel is paused. */
@@ -114,6 +135,7 @@ const EXEC_TIMEOUT_MS = 10_000;
 const MAX_EXEC_OUTPUT = 256 * 1024;
 
 const DEFAULTS: Required<Omit<EngineOptions, 'kdf'>> = {
+  transferThrottle: 0,
   connectTimeoutMs: 20_000,
   promptTimeoutMs: 5 * 60_000,
   keepaliveIntervalMs: 15_000,
@@ -154,10 +176,30 @@ interface Session {
   paused: boolean;
   /** Set once the user closed it; nothing more is emitted. */
   disposed: boolean;
-  /** The password that last worked (or was typed), for reconnects. Dropped on lock. */
-  password: string | null;
-  /** A typed password to save in the vault once it is accepted. */
-  rememberPassword: boolean;
+  /** Passwords that last worked (or were typed) per hop, for reconnects. Dropped on lock. */
+  passwords: Map<string, string>;
+  /** Typed passwords (by saved-password id) to save in the vault once accepted. */
+  remember: Set<string>;
+  /** Connections to the jump hosts in front of `client`, first hop first. */
+  jumps: Client[];
+  /** The SFTP channel on `client`, opened on first use. */
+  sftp: Promise<SFTPWrapper> | null;
+  /** The saved host as last read (file roots, upload folder, agent forwarding). */
+  host: HostInfo | null;
+}
+
+/** One hop of a connection: a jump host or the target itself. */
+interface Hop {
+  host: string;
+  port: number;
+  username: string;
+  auth: Auth;
+  /** How prompts and errors name it (`web-1`, `user@10.0.0.5`). */
+  label: string;
+  /** Not the target: errors are prefixed with "Jump host …". */
+  jump: boolean;
+  /** Forward the agent over this hop's shell (target only). */
+  agentForward: boolean;
 }
 
 interface PendingHostKey {
@@ -212,6 +254,8 @@ export class Engine {
   private hosts: HostStore | null = null;
   private sshConfig: { token: string; hosts: SshConfigHost[]; expires: number } | null = null;
   readonly knownHosts: KnownHosts;
+  private readonly transfers: Transfers;
+  private readonly forwards: Forwards;
   private nextPrompt = 0;
   /** Calls run one at a time, in order (opening the vault finishes before any status call). */
   private calls: Promise<void> = Promise.resolve();
@@ -224,6 +268,14 @@ export class Engine {
     this.kdf = kdf;
     this.options = { ...DEFAULTS, ...rest };
     this.knownHosts = new KnownHosts((data) => this.saveKnownHosts(data));
+    this.transfers = new Transfers(
+      (transfer) => this.emit({ type: 'transfer', sessionId: transfer.sessionId, transfer }),
+      (sessionId) => this.sessions.get(sessionId)?.state === 'ready',
+      this.options.transferThrottle,
+    );
+    this.forwards = new Forwards((sessionId, forwards) =>
+      this.emit({ type: 'forwards', sessionId, forwards }),
+    );
   }
 
   /** Handles one command from main; anything that fails the schema is dropped. */
@@ -262,9 +314,13 @@ export class Engine {
         this.tmux(command.message);
         break;
       case 'call':
-        this.calls = this.calls.then(() =>
-          this.dispatch(command.callId, command.method, command.params),
-        );
+        if (CONCURRENT_CALLS.has(command.method)) {
+          void this.dispatch(command.callId, command.method, command.params);
+        } else {
+          this.calls = this.calls.then(() =>
+            this.dispatch(command.callId, command.method, command.params),
+          );
+        }
         break;
       case 'shutdown':
         this.shutdown();
@@ -450,7 +506,197 @@ export class Engine {
       await this.requireHosts().saveUi(state);
       return {};
     },
+    'hosts.setOsc52': async ({ id, policy }) => this.requireHosts().setOsc52(id, policy),
+    'files.list': async ({ sessionId, path }) => {
+      const files = await this.filesOf(sessionId);
+      const home = await files.home();
+      const listed = await files.list(path ?? (await files.start()));
+      return { ...listed, home, roots: [...files.roots] };
+    },
+    'files.mkdir': async ({ sessionId, parent, name }) =>
+      (await this.filesOf(sessionId)).mkdir(parent, name),
+    'files.rename': async ({ sessionId, from, toParent, toName, overwrite }) =>
+      (await this.filesOf(sessionId)).rename(from, toParent, toName, overwrite),
+    'files.delete': async ({ sessionId, path, recursive }) =>
+      (await this.filesOf(sessionId)).delete(path, recursive),
+    'files.upload': async (params) => this.upload(params),
+    'files.download': async ({ sessionId, paths, folder }) => {
+      const files = await this.filesOf(sessionId);
+      const sources: { remotePath: string; size: number }[] = [];
+      for (const path of paths) {
+        const entry = await files.stat(path);
+        if (entry.type !== 'file') {
+          throw new CallError('invalid_request', `"${entry.name}" is not a file`);
+        }
+        sources.push({ remotePath: entry.path, size: entry.size });
+      }
+      const started = sources.map((source) =>
+        this.transfers.download(sessionId, () => this.filesOf(sessionId), { ...source, folder }),
+      );
+      return { started: started.map((t) => ({ ...t })) };
+    },
+    'transfers.cancel': async ({ sessionId, id }) => {
+      const session = this.sessions.get(sessionId);
+      this.transfers.cancel(
+        sessionId,
+        id,
+        session?.state === 'ready' ? () => this.filesOf(sessionId) : null,
+      );
+      return {};
+    },
+    'transfers.resume': async ({ sessionId, id }) => {
+      await this.filesOf(sessionId);
+      this.transfers.resume(sessionId, id, () => this.filesOf(sessionId));
+      return {};
+    },
+    'forwards.start': async ({ sessionId, spec, savedId }) => {
+      const session = this.readySession(sessionId);
+      let chosen = spec;
+      if (savedId !== undefined) {
+        // A saved forward runs as saved, whatever the renderer sent.
+        const saved = session.host?.forwards.find((f) => f.id === savedId);
+        if (!saved) throw new CallError('not_found', 'That saved forward no longer exists');
+        const { id: _id, auto: _auto, label: _label, ...savedSpec } = saved;
+        chosen = savedSpec;
+      }
+      return this.forwards.start(sessionId, this.clientOf(session), chosen, {
+        hostId: session.hostId,
+        savedId: savedId ?? null,
+      });
+    },
+    'forwards.stop': async ({ sessionId, id }) => {
+      this.forwards.stop(sessionId, id);
+      return {};
+    },
+    'forwards.list': async () => ({ forwards: this.forwards.list() }),
+    'agent.list': async ({ agent }) => listAgentKeys(agent),
+    'keys.install': async ({ sessionId, keyId }) => {
+      const key = this.requireKeys().describe(keyId);
+      const session = this.readySession(sessionId);
+      if (session.host?.os === 'windows') {
+        throw new CallError(
+          'invalid_request',
+          "Windows OpenSSH keeps administrators' keys elsewhere; add the key on the host by hand",
+        );
+      }
+      return installAuthorizedKey(await this.sftpOf(session), key.publicKey);
+    },
   };
+
+  /* ----- Files and transfers ----------------------------------------------- */
+
+  private readySession(sessionId: string): Session {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.disposed || session.state !== 'ready' || !session.client) {
+      throw new CallError('not_connected', 'The session is not connected');
+    }
+    return session;
+  }
+
+  private clientOf(session: Session): Client {
+    if (!session.client) throw new CallError('not_connected', 'The session is not connected');
+    return session.client;
+  }
+
+  /** The session's SFTP channel, opened once per connection. */
+  private sftpOf(session: Session): Promise<SFTPWrapper> {
+    const client = this.clientOf(session);
+    if (!session.sftp) {
+      const opened = new Promise<SFTPWrapper>((resolve, reject) => {
+        try {
+          client.sftp((error, sftp) => {
+            if (error) {
+              reject(new CallError('io', 'The host does not offer SFTP'));
+              return;
+            }
+            sftp.on('close', () => {
+              if (session.sftp === opened) session.sftp = null;
+            });
+            resolve(sftp);
+          });
+        } catch {
+          reject(new CallError('not_connected', 'The session is not connected'));
+        }
+      });
+      opened.catch(() => {
+        if (session.sftp === opened) session.sftp = null;
+      });
+      session.sftp = opened;
+    }
+    return session.sftp;
+  }
+
+  private async filesOf(sessionId: string): Promise<RemoteFiles> {
+    const session = this.readySession(sessionId);
+    return new RemoteFiles(await this.sftpOf(session), session.host?.fileRoots ?? []);
+  }
+
+  /** The host's upload folder (created if missing): its own, the first file root, or ~/uploads. */
+  private async uploadFolder(session: Session, files: RemoteFiles): Promise<string> {
+    const host = session.host;
+    const folder = host?.uploadDir || host?.fileRoots[0] || '~/uploads';
+    return files.ensureDirectory(folder);
+  }
+
+  private async upload(params: EngineParams<'files.upload'>) {
+    const { sessionId, conflict } = params;
+    const session = this.readySession(sessionId);
+    const files = await this.filesOf(sessionId);
+    const directory =
+      params.directory === null
+        ? await this.uploadFolder(session, files)
+        : await files.resolveExisting(params.directory);
+    const folder = await files.stat(directory);
+    if (folder.type !== 'directory') throw new CallError('invalid_request', 'That is not a folder');
+    const started: ReturnType<Transfers['upload']>[] = [];
+    const conflicts: string[] = [];
+    const paths: string[] = [];
+    const taken = new Set<string>();
+    for (const file of params.files) {
+      assertValidName(file.name);
+      let local;
+      try {
+        local = await stat(file.path);
+      } catch {
+        throw new CallError('not_found', `${file.name} is no longer on this computer`);
+      }
+      if (!local.isFile()) throw new CallError('invalid_request', `${file.name} is not a file`);
+      let name = file.name;
+      let overwrite = false;
+      const exists =
+        taken.has(name) || (await files.lstatOrNull(posix.join(directory, name))) !== null;
+      if (exists) {
+        if (conflict === 'ask') {
+          conflicts.push(name);
+          continue;
+        }
+        if (conflict === 'overwrite' && !taken.has(name)) overwrite = true;
+        else name = await freeRemoteName(files, directory, name, taken);
+      }
+      taken.add(name);
+      started.push(
+        this.transfers.upload(
+          sessionId,
+          () => this.filesOf(sessionId),
+          { localPath: file.path, name, directory, size: local.size, mtimeMs: local.mtimeMs },
+          overwrite,
+        ),
+      );
+      paths.push(posix.join(directory, name));
+    }
+    const snapshot = started.map((t) => ({ ...t }));
+    if (params.wait) {
+      const results = await Promise.all(started.map((t) => this.transfers.wait(t.id)));
+      const failed = results.find((r) => r.state !== 'done');
+      if (failed) {
+        throw new CallError(
+          'io',
+          `The upload of ${failed.name} did not finish${failed.error ? `: ${failed.error}` : ''}`,
+        );
+      }
+    }
+    return { started: snapshot, conflicts, paths };
+  }
 
   private withUsage(keys: KeyInfo[]): KeyInfo[] {
     const usage = this.hosts?.keyUsage() ?? new Map<string, number>();
@@ -576,6 +822,11 @@ export class Engine {
         proxyJump: clean(entry.proxyJump, 255),
         scheme: '',
         font: '',
+        agentForward: false,
+        fileRoots: [],
+        uploadDir: '',
+        osc52: 'ask',
+        forwards: [],
       });
       imported++;
     }
@@ -608,8 +859,8 @@ export class Engine {
       this.passphrases.clear();
       this.changedKeys.clear();
       for (const session of this.sessions.values()) {
-        session.password = null;
-        session.rememberPassword = false;
+        session.passwords.clear();
+        session.remember.clear();
       }
       for (const requestId of [...this.prompts.keys()]) this.answerPrompt(requestId, null, false);
       for (const requestId of [...this.hostKeyPrompts.keys()]) this.answerHostKey(requestId, false);
@@ -663,8 +914,11 @@ export class Engine {
       unacked: 0,
       paused: false,
       disposed: false,
-      password: null,
-      rememberPassword: false,
+      passwords: new Map(),
+      remember: new Set(),
+      jumps: [],
+      sftp: null,
+      host: null,
     };
     this.sessions.set(sessionId, session);
     void this.open(session);
@@ -720,8 +974,10 @@ export class Engine {
     session.disposed = true;
     this.sessions.delete(sessionId);
     this.cancelPrompts(sessionId);
+    this.forwards.drop(sessionId);
+    this.transfers.dropSession(sessionId);
     this.teardown(session);
-    session.password = null;
+    session.passwords.clear();
     this.emit({ type: 'closed', sessionId, exitCode: null });
   }
 
@@ -761,13 +1017,18 @@ export class Engine {
 
     try {
       const host = this.resolveHost(session);
-      const client = await this.handshake(session, current);
+      const client = await this.connectChain(session, current, host);
       if (!current()) {
         client.end();
+        this.endJumps(session);
         return;
       }
       const { action } = session;
       const tmuxUsable = host !== null && host.tmux && host.os === 'linux';
+      if (action.type === 'hold') {
+        this.attach(session, generation, client, null);
+        return;
+      }
       if (action.type !== 'shell') {
         // A one-shot connection: (end a session,) list them, report, close.
         if (action.type === 'end') await this.exec(client, killCommand(action.session));
@@ -775,6 +1036,7 @@ export class Engine {
           ? parseList((await this.exec(client, listCommand())).stdout)
           : { available: false, sessions: [] };
         client.end();
+        this.endJumps(session);
         if (!current()) return;
         this.emitSessions(session.id, listed.available, listed.sessions);
         session.state = 'closed';
@@ -804,13 +1066,16 @@ export class Engine {
         }
       }
       const pty = { term: 'xterm-256color', cols: session.cols, rows: session.rows };
+      const agentForward = host?.agentForward === true;
       const channel = await new Promise<ClientChannel>((resolve, reject) => {
         const done = (error: Error | undefined, stream: ClientChannel) =>
           error ? reject(error) : resolve(stream);
-        if (command) client.exec(command, { pty }, done);
-        else client.shell(pty, done);
+        if (command) client.exec(command, { pty, ...(agentForward && { agentForward }) }, done);
+        // ssh2 honours `agentForward` on shell channels; its types leave it out.
+        else client.shell(pty, (agentForward ? { agentForward } : {}) as ShellOptions, done);
       }).catch((error: unknown) => {
         client.end();
+        this.endJumps(session);
         throw new SshError(
           'unreachable',
           `The server did not open a shell: ${(error as Error).message}`,
@@ -819,6 +1084,7 @@ export class Engine {
       if (!current()) {
         channel.close();
         client.end();
+        this.endJumps(session);
         return;
       }
       session.tmux = command ? action.tmux : null;
@@ -828,6 +1094,7 @@ export class Engine {
       session.state = 'closed';
       session.client = null;
       session.channel = null;
+      this.endJumps(session);
       const failure =
         error instanceof SshError
           ? error
@@ -850,6 +1117,7 @@ export class Engine {
     }
     const host = this.hosts?.get(session.hostId);
     if (!host) throw new SshError('invalid_request', 'That host is no longer saved');
+    session.host = host;
     session.request = {
       host: host.address,
       port: host.port,
@@ -953,11 +1221,109 @@ export class Engine {
     void pump().catch(() => undefined);
   }
 
-  /** Connects and authenticates, asking the user about an unknown host key and for secrets. */
-  private handshake(session: Session, current: () => boolean): Promise<Client> {
+  /**
+   * Connects through the host's jump hosts (if any) to the host itself and
+   * logs in to each. Every hop checks its own pinned host key and uses its
+   * own login; the connections in front of the target stay in `session.jumps`.
+   */
+  private async connectChain(
+    session: Session,
+    current: () => boolean,
+    host: HostInfo | null,
+  ): Promise<Client> {
+    this.endJumps(session);
     const { request } = session;
-    const host = unbracket(request.host);
-    const { auth } = request;
+    const target: Hop = {
+      host: unbracket(request.host),
+      port: request.port,
+      username: request.username,
+      auth: request.auth,
+      label: host?.name ?? `${request.username}@${unbracket(request.host)}`,
+      jump: false,
+      agentForward: host?.agentForward === true,
+    };
+    let jumps: Hop[] = [];
+    if (host) {
+      let chain: HostInfo[];
+      try {
+        chain = resolveChain(host, this.hosts?.list() ?? []);
+      } catch (error) {
+        throw new SshError(
+          'invalid_request',
+          error instanceof JumpError ? error.message : 'The jump hosts could not be worked out',
+        );
+      }
+      jumps = chain.map((jump) => ({
+        host: jump.address,
+        port: jump.port,
+        username: jump.username,
+        auth: jump.auth,
+        label: jump.name,
+        jump: true,
+        agentForward: false,
+      }));
+    }
+    let previous: { client: Client; hop: Hop } | null = null;
+    for (const hop of [...jumps, target]) {
+      if (!current()) throw new SshError('connection_lost', 'Cancelled');
+      try {
+        const sock = previous
+          ? await this.forwardThrough(previous.client, previous.hop, hop)
+          : undefined;
+        const client = await this.handshake(session, current, hop, sock);
+        if (!hop.jump) return client;
+        session.jumps.push(client);
+        previous = { client, hop };
+      } catch (error) {
+        if (!hop.jump || !(error instanceof SshError)) throw error;
+        throw new SshError(error.code, `Jump host ${hop.label}: ${error.message}`);
+      }
+    }
+    throw new SshError('invalid_request', 'Nothing to connect to');
+  }
+
+  /** A tunnel from a connected jump host to the next hop's SSH port. */
+  private forwardThrough(client: Client, via: Hop, next: Hop): Promise<Duplex> {
+    return new Promise<Duplex>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new SshError('timeout', `${via.label} timed out reaching ${next.label}`)),
+        this.options.connectTimeoutMs,
+      );
+      try {
+        client.forwardOut('127.0.0.1', 0, unbracket(next.host), next.port, (error, stream) => {
+          clearTimeout(timer);
+          if (error) {
+            reject(
+              new SshError(
+                'unreachable',
+                `Jump host ${via.label} could not reach ${next.label} (${unbracket(next.host)}:${next.port})`,
+              ),
+            );
+          } else resolve(stream);
+        });
+      } catch {
+        clearTimeout(timer);
+        reject(new SshError('connection_lost', `Jump host ${via.label} disconnected`));
+      }
+    });
+  }
+
+  private endJumps(session: Session) {
+    for (const jump of session.jumps.splice(0).reverse()) {
+      jump.end();
+      jump.destroy();
+    }
+  }
+
+  /** Connects and authenticates one hop, asking the user about an unknown host key and for secrets. */
+  private handshake(
+    session: Session,
+    current: () => boolean,
+    hop: Hop,
+    sock: Duplex | undefined,
+  ): Promise<Client> {
+    const host = unbracket(hop.host);
+    const { auth } = hop;
 
     if (this.vault?.state !== 'unlocked') {
       return Promise.reject(new SshError('vault_locked', 'Unlock the vault to connect'));
@@ -965,7 +1331,15 @@ export class Engine {
     if (auth.kind === 'key' && !this.keys?.material(auth.keyId)) {
       return Promise.reject(new SshError('invalid_key', 'That key is no longer in the vault'));
     }
-    const pins = this.knownHosts.pinsFor(host, request.port);
+    if (auth.kind === 'agent') {
+      const location = locateAgent(auth.agent);
+      if (!location.ok) return Promise.reject(new SshError('auth_failed', location.message));
+    }
+    const pins = this.knownHosts.pinsFor(host, hop.port);
+    // The agent ssh2 offers for forwarding (requested per channel, see `open`).
+    const forwardFrom = hop.agentForward
+      ? locateAgent(auth.kind === 'agent' ? auth.agent : 'system')
+      : null;
 
     return new Promise<Client>((resolve, reject) => {
       const client = new Client();
@@ -1004,6 +1378,7 @@ export class Engine {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        this.savePasswordIfAsked(session, hop);
         resolve(client);
       });
       client.on('error', (error: Error & { level?: string; code?: string }) => {
@@ -1014,9 +1389,13 @@ export class Engine {
               'auth_failed',
               auth.kind === 'password'
                 ? 'The server rejected the user name or password'
-                : 'The server rejected the user name or key',
+                : auth.kind === 'agent'
+                  ? "The server accepted none of the agent's keys"
+                  : 'The server rejected the user name or key',
             ),
           );
+        } else if (error.level === 'agent') {
+          fail(new SshError('auth_failed', 'The SSH agent could not be used'));
         } else if (error.level === 'client-timeout' || /timed out/i.test(error.message)) {
           fail(new SshError('timeout', 'Timed out connecting to the host'));
         } else {
@@ -1028,14 +1407,16 @@ export class Engine {
       });
       client.once('connect', () => client.setNoDelay(true));
 
-      const authHandler = this.authHandler(session, current, whileAsking, (error) => {
+      const authHandler = this.authHandler(session, hop, current, whileAsking, (error) => {
         failure = error;
       });
 
       const config: ConnectConfig = {
         host,
-        port: request.port,
-        username: request.username,
+        port: hop.port,
+        username: hop.username,
+        ...(sock && { sock: sock as NonNullable<ConnectConfig['sock']> }),
+        ...(forwardFrom?.ok && { agent: forwardFrom.path }),
         // Our own timers: the time spent on prompts must not count.
         readyTimeout: 0,
         keepaliveInterval: this.options.keepaliveIntervalMs,
@@ -1043,7 +1424,7 @@ export class Engine {
         ...(pins.length > 0 && { algorithms: { serverHostKey: hostKeyAlgorithmsFor(pins) } }),
         authHandler,
         hostVerifier: (presented: Buffer, verify: (valid: boolean) => void) => {
-          const verdict = this.knownHosts.check(host, request.port, presented);
+          const verdict = this.knownHosts.check(host, hop.port, presented);
           if (verdict === 'trusted') return verify(true);
           let key: ReturnType<typeof describeHostKey>;
           try {
@@ -1053,16 +1434,16 @@ export class Engine {
             return verify(false);
           }
           if (verdict === 'mismatch') {
-            this.reportChangedKey(session.id, host, request.port, key);
+            this.reportChangedKey(session.id, host, hop.port, key);
             failure = new SshError(
               'host_key_mismatch',
-              `The host key for ${host}:${request.port} has changed (now ${key.algorithm} ${key.fingerprint}). ` +
+              `The host key for ${host}:${hop.port} has changed (now ${key.algorithm} ${key.fingerprint}). ` +
                 'This could be an attack; the connection was refused.',
             );
             return verify(false);
           }
           void whileAsking(() =>
-            this.askHostKey(session.id, host, request.port, key.algorithm, key.fingerprint),
+            this.askHostKey(session.id, host, hop.port, key.algorithm, key.fingerprint),
           ).then(async (accept) => {
             if (settled) return;
             if (!accept || !current()) {
@@ -1071,7 +1452,7 @@ export class Engine {
               return;
             }
             try {
-              await this.knownHosts.accept(host, request.port, key);
+              await this.knownHosts.accept(host, hop.port, key);
             } catch {
               // Locked meanwhile, or the disk is full: trusted for this connection only.
               console.error('Could not save the accepted host key');
@@ -1090,20 +1471,35 @@ export class Engine {
     });
   }
 
+  /** A typed password the user asked to keep is saved once the hop accepted it. */
+  private savePasswordIfAsked(session: Session, hop: Hop) {
+    const host = unbracket(hop.host);
+    const id = passwordId(host, hop.port, hop.username);
+    if (!session.remember.has(id)) return;
+    session.remember.delete(id);
+    const password = session.passwords.get(id);
+    if (password === undefined) return;
+    const saved: SavedPassword = { host, port: hop.port, username: hop.username, password };
+    void this.vault
+      ?.put('password', id, saved)
+      .catch(() => console.error('Could not save the password'));
+  }
+
   /**
    * Chooses the next login method. Key logins offer the stored key (asking
-   * for its passphrase if needed); password logins use the saved or typed
-   * password (asking again when rejected) and fall back to
-   * keyboard-interactive, whose server prompts are shown to the user.
+   * for its passphrase if needed); agent logins offer the agent's keys;
+   * password logins use the saved or typed password (asking again when
+   * rejected) and fall back to keyboard-interactive, whose server prompts are
+   * shown to the user.
    */
   private authHandler(
     session: Session,
+    hop: Hop,
     current: () => boolean,
     whileAsking: Asking,
     setFailure: (error: SshError) => void,
   ): AuthHandlerMiddleware {
-    const { request } = session;
-    const { username } = request;
+    const { username } = hop;
     let keyOffered = false;
     let passwordTries = 0;
     let keyboardTried = false;
@@ -1118,7 +1514,7 @@ export class Engine {
       if (prompts.length === 0) return finish([]);
       void whileAsking(() =>
         this.ask(session.id, 'keyboard-interactive', {
-          title: clean(name, 100) || 'The server asks',
+          title: clean(name, 100) || `${hop.label} asks`,
           message: clean(instructions, 2000),
           prompts: prompts.slice(0, 10).map((p) => ({
             label: clean(p.prompt, 200) || 'Response',
@@ -1137,19 +1533,26 @@ export class Engine {
     };
 
     const step = async (methodsLeft: string[] | null) => {
-      const auth = request.auth;
+      const auth = hop.auth;
       if (auth.kind === 'key') {
         if (keyOffered) return false as const;
         keyOffered = true;
         const unlocked = await this.unlockKey(session, auth.keyId, whileAsking);
         return { type: 'publickey' as const, username, ...unlocked };
       }
+      if (auth.kind === 'agent') {
+        if (keyOffered) return false as const;
+        keyOffered = true;
+        const location = locateAgent(auth.agent);
+        if (!location.ok) throw new SshError('auth_failed', location.message);
+        return { type: 'agent' as const, username, agent: agentFor(location.path) };
+      }
       // Learn which methods the server offers before asking for anything.
       if (methodsLeft === null) return { type: 'none' as const, username };
       if (methodsLeft.includes('password') && passwordTries < MAX_SECRET_ATTEMPTS) {
         const retry = passwordTries > 0;
         passwordTries++;
-        const password = await this.passwordFor(session, retry, whileAsking);
+        const password = await this.passwordFor(session, hop, retry, whileAsking);
         return { type: 'password' as const, username, password };
       }
       if (methodsLeft.includes('keyboard-interactive') && !keyboardTried) {
@@ -1213,22 +1616,24 @@ export class Engine {
     throw new SshError('invalid_key', 'The passphrase for the private key is wrong');
   }
 
-  private async passwordFor(session: Session, retry: boolean, whileAsking: Asking) {
-    const { host, port, username } = session.request;
-    const savedId = passwordId(unbracket(host), port, username);
+  private async passwordFor(session: Session, hop: Hop, retry: boolean, whileAsking: Asking) {
+    const { port, username } = hop;
+    const host = unbracket(hop.host);
+    const savedId = passwordId(host, port, username);
     if (!retry) {
-      if (session.password !== null) return session.password;
+      const known = session.passwords.get(savedId);
+      if (known !== undefined) return known;
       const saved = this.vault?.get<SavedPassword>('password', savedId);
       if (saved) {
-        session.password = saved.password;
+        session.passwords.set(savedId, saved.password);
         return saved.password;
       }
     }
-    session.password = null;
-    const where = `${username}@${unbracket(host)}${port === 22 ? '' : `:${port}`}`;
+    session.passwords.delete(savedId);
+    const where = `${username}@${host}${port === 22 ? '' : `:${port}`}`;
     const answer = await whileAsking(() =>
       this.ask(session.id, 'password', {
-        title: `Password for ${where}`,
+        title: hop.jump ? `Password for ${where} (jump host)` : `Password for ${where}`,
         message: retry ? 'The server rejected the password; try again' : '',
         prompts: [{ label: 'Password', echo: false }],
         canRemember: true,
@@ -1236,8 +1641,9 @@ export class Engine {
     );
     if (!answer) throw new SshError('auth_cancelled', 'Login cancelled');
     const password = answer.answers[0] ?? '';
-    session.password = password;
-    session.rememberPassword = answer.remember;
+    session.passwords.set(savedId, password);
+    if (answer.remember) session.remember.add(savedId);
+    else session.remember.delete(savedId);
     if (retry) {
       // A saved password that no longer works is not offered again.
       await this.vault?.delete('password', savedId).catch(() => false);
@@ -1329,68 +1735,66 @@ export class Engine {
 
   /* ----- Connected --------------------------------------------------------- */
 
-  private attach(session: Session, generation: number, client: Client, channel: ClientChannel) {
+  /** A connected session: a shell (`channel`) or a `hold` connection (no channel). */
+  private attach(
+    session: Session,
+    generation: number,
+    client: Client,
+    channel: ClientChannel | null,
+  ) {
     session.client = client;
     session.channel = channel;
+    session.sftp = null;
     session.state = 'ready';
     const current = () => !session.disposed && session.generation === generation;
     let exitCode: number | null = null;
     let lost: SshError | null = null;
     let closed = false;
 
-    if (session.rememberPassword && session.password !== null) {
-      // Saved only once the server accepted it.
-      session.rememberPassword = false;
-      const { host, port, username } = session.request;
-      const saved: SavedPassword = {
-        host: unbracket(host),
-        port,
-        username,
-        password: session.password,
-      };
-      void this.vault
-        ?.put('password', passwordId(saved.host, port, username), saved)
-        .catch(() => console.error('Could not save the password'));
-    }
-
-    const onData = (chunk: Buffer) => {
-      if (!current()) return;
-      session.unacked += chunk.length;
-      this.emit({
-        type: 'data',
-        sessionId: session.id,
-        data: new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength),
-      });
-      if (!session.paused && session.unacked > HIGH_WATER_BYTES) {
-        session.paused = true;
-        channel.pause();
-      }
-    };
-    channel.on('data', onData);
-    channel.stderr.on('data', onData);
-    channel.on('exit', (code: number | null) => {
-      exitCode = typeof code === 'number' ? code : null;
-    });
-
     const finish = () => {
       if (closed) return;
       closed = true;
       client.end();
+      this.endJumps(session);
       if (!current()) return;
       session.state = 'closed';
       session.channel = null;
       session.client = null;
-      if (lost && exitCode === null) {
+      session.sftp = null;
+      this.forwards.pause(session.id);
+      this.transfers.interruptSession(session.id);
+      if (lost && (exitCode === null || channel === null)) {
         this.emit({ type: 'error', sessionId: session.id, code: lost.code, message: lost.message });
       }
       this.emit({
         type: 'closed',
         sessionId: session.id,
         // A shell that ended without a status (killed by a signal) still ended.
-        exitCode: lost ? exitCode : (exitCode ?? 0),
+        exitCode: channel === null ? null : lost ? exitCode : (exitCode ?? 0),
       });
     };
-    channel.on('close', finish);
+
+    if (channel) {
+      const onData = (chunk: Buffer) => {
+        if (!current()) return;
+        session.unacked += chunk.length;
+        this.emit({
+          type: 'data',
+          sessionId: session.id,
+          data: new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength),
+        });
+        if (!session.paused && session.unacked > HIGH_WATER_BYTES) {
+          session.paused = true;
+          channel.pause();
+        }
+      };
+      channel.on('data', onData);
+      channel.stderr.on('data', onData);
+      channel.on('exit', (code: number | null) => {
+        exitCode = typeof code === 'number' ? code : null;
+      });
+      channel.on('close', finish);
+    }
     client.on('error', (error: Error) => {
       lost ??= new SshError('connection_lost', `Connection lost: ${error.message}`);
     });
@@ -1400,14 +1804,33 @@ export class Engine {
     });
 
     // Size may have changed while connecting.
-    if (session.cols !== session.request.cols || session.rows !== session.request.rows) {
+    if (
+      channel &&
+      (session.cols !== session.request.cols || session.rows !== session.request.rows)
+    ) {
       channel.setWindow(session.rows, session.cols, 0, 0);
     }
-    if (session.hostId !== null && !session.counted) {
+    if (channel && session.hostId !== null && !session.counted) {
       session.counted = true;
       void this.hosts?.touch(session.hostId).catch(() => undefined);
     }
     this.emit({ type: 'ready', sessionId: session.id, tmux: session.tmux });
+    // Forwards and transfers the last drop interrupted continue; saved
+    // forwards marked "start automatically" open on the first session to the host.
+    void this.forwards.resume(session.id, client).then(() => this.autoForwards(session, client));
+    this.transfers.resumeSession(session.id, () => this.filesOf(session.id));
+  }
+
+  private async autoForwards(session: Session, client: Client) {
+    const host = session.host;
+    if (!host || session.state !== 'ready' || session.client !== client) return;
+    for (const saved of host.forwards) {
+      if (!saved.auto || this.forwards.runs(host.id, saved.id)) continue;
+      const { id, auto: _auto, label: _label, ...spec } = saved;
+      await this.forwards
+        .start(session.id, client, spec, { hostId: host.id, savedId: id, keepFailed: true })
+        .catch(() => undefined);
+    }
   }
 
   private teardown(session: Session) {
@@ -1415,8 +1838,10 @@ export class Engine {
     session.channel?.close();
     session.client?.end();
     session.client?.destroy();
+    this.endJumps(session);
     session.channel = null;
     session.client = null;
+    session.sftp = null;
   }
 }
 
@@ -1463,6 +1888,24 @@ function clean(text: string, max: number): string {
 }
 // eslint-disable-next-line no-control-regex
 const UNPRINTABLE = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
+
+/** `name-1.ext`, `name-2.ext`… the first that is free in the remote folder. */
+async function freeRemoteName(
+  files: RemoteFiles,
+  directory: string,
+  name: string,
+  taken: Set<string>,
+): Promise<string> {
+  const dot = name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  for (let n = 1; n < 1000; n++) {
+    const candidate = `${stem}-${n}${ext}`;
+    if (taken.has(candidate)) continue;
+    if ((await files.lstatOrNull(posix.join(directory, candidate))) === null) return candidate;
+  }
+  throw new CallError('exists', `Too many files called ${name} in that folder`);
+}
 
 async function readSmallFile(path: string, maxBytes: number, tooLarge: string): Promise<string> {
   try {

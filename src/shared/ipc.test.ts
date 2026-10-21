@@ -355,3 +355,145 @@ describe('Phase 3 messages', () => {
     expect(check('hosts.delete', { id: 'h_0123456789abcdef' })).toBe(false);
   });
 });
+
+describe('Phase 4 calls', () => {
+  const check = (method: keyof typeof AppCalls, params: unknown) =>
+    Value.Check(AppCalls[method].params, params);
+  const sessionId = 's1';
+
+  it('takes absolute remote paths and plain new names only', () => {
+    expect(check('files.list', { sessionId })).toBe(true);
+    expect(check('files.list', { sessionId, path: '/home/me' })).toBe(true);
+    expect(check('files.list', { sessionId, path: '/C:/Users/me' })).toBe(true);
+    for (const path of ['home/me', '~/x', '', '/a\u0000b', `/${'a'.repeat(5000)}`]) {
+      expect(check('files.list', { sessionId, path })).toBe(false);
+    }
+    expect(check('files.list', { sessionId: 'x; rm', path: '/' })).toBe(false);
+    const mkdir = (name: string) => check('files.mkdir', { sessionId, parent: '/tmp', name });
+    expect(mkdir('reports 2026')).toBe(true);
+    for (const name of ['', '.', '..', 'a/b', 'a\nb', 'x'.repeat(256)]) {
+      expect(mkdir(name)).toBe(false);
+    }
+    expect(mkdir('...')).toBe(true);
+  });
+
+  it('uploads by grant only, never by local path', () => {
+    const upload = {
+      sessionId,
+      directory: null,
+      grants: ['g0123456789abcdef01234567'],
+      conflict: 'ask',
+      wait: false,
+    };
+    expect(check('files.upload', upload)).toBe(true);
+    expect(check('files.upload', { ...upload, grants: ['/etc/passwd'] })).toBe(false);
+    expect(check('files.upload', { ...upload, files: [{ path: '/etc/shadow', name: 'x' }] })).toBe(
+      false,
+    );
+    expect(check('files.upload', { ...upload, conflict: 'clobber' })).toBe(false);
+    expect(check('files.download', { sessionId, paths: ['/var/log/syslog'] })).toBe(true);
+    expect(check('files.download', { sessionId, paths: ['/x'], folder: '/tmp' })).toBe(false);
+    expect(check('files.pasteClipboard', { sessionId, path: '/tmp/x.png' })).toBe(false);
+  });
+
+  it('takes forwards with an explicit public opt-in and valid addresses', () => {
+    const spec = {
+      kind: 'local',
+      bindAddress: '127.0.0.1',
+      bindPort: 8080,
+      destHost: 'db.internal',
+      destPort: 5432,
+      allowPublic: false,
+    };
+    expect(check('forwards.start', { sessionId, spec })).toBe(true);
+    expect(
+      check('forwards.start', {
+        sessionId,
+        spec: { ...spec, kind: 'dynamic', destHost: '', destPort: 0 },
+      }),
+    ).toBe(true);
+    for (const bad of [
+      { bindAddress: 'a b' },
+      { bindPort: 0 },
+      { bindPort: 70000 },
+      { destHost: 'x;y' },
+      { kind: 'x11' },
+      { allowPublic: 'yes' },
+      { command: 'id' },
+    ]) {
+      expect(check('forwards.start', { sessionId, spec: { ...spec, ...bad } })).toBe(false);
+    }
+  });
+
+  it('chooses agents only by kind, never by socket path', () => {
+    expect(check('agent.list', { agent: 'system' })).toBe(true);
+    expect(check('agent.list', { agent: 'pageant' })).toBe(true);
+    expect(check('agent.list', { agent: '/tmp/evil.sock' })).toBe(false);
+    expect(
+      Value.Check(ConnectRequest, { ...connect, auth: { kind: 'agent', agent: 'system' } }),
+    ).toBe(true);
+    expect(
+      Value.Check(ConnectRequest, { ...connect, auth: { kind: 'agent', path: '/tmp/a.sock' } }),
+    ).toBe(false);
+  });
+
+  it('checks the new host fields', () => {
+    const host = {
+      name: 'web',
+      address: 'web.example.com',
+      port: 22,
+      username: 'me',
+      auth: { kind: 'password' },
+      os: 'linux',
+      group: '',
+      tags: [],
+      notes: '',
+      color: '',
+      tmux: false,
+      jumpHostId: null,
+      proxyJump: '',
+      scheme: '',
+      font: '',
+      agentForward: false,
+      fileRoots: ['/srv/app'],
+      uploadDir: '~/uploads',
+      osc52: 'ask',
+      forwards: [],
+    };
+    expect(check('hosts.save', { host })).toBe(true);
+    for (const bad of [
+      { fileRoots: ['srv'] },
+      { uploadDir: 'uploads' },
+      { uploadDir: '~/a\nb' },
+      { osc52: 'always' },
+      { forwards: [{ id: 'f_x' }] },
+    ]) {
+      expect(check('hosts.save', { host: { ...host, ...bad } })).toBe(false);
+    }
+    expect(check('hosts.setOsc52', { id: 'h_0123456789abcdef', policy: 'allow' })).toBe(true);
+    expect(check('hosts.setOsc52', { id: 'h_0123456789abcdef', policy: 'read' })).toBe(false);
+  });
+
+  it('lets the engine receive local paths only from main', () => {
+    const engineUpload = EngineCalls['files.upload'].params;
+    expect(
+      Value.Check(engineUpload, {
+        sessionId,
+        directory: null,
+        files: [{ path: '/tmp/clipboard_1.png', name: 'clipboard_1.png' }],
+        conflict: 'rename',
+        wait: true,
+      }),
+    ).toBe(true);
+    // The renderer's call has no `files`, the engine's no `grants`.
+    expect(
+      Value.Check(engineUpload, {
+        sessionId,
+        directory: null,
+        grants: ['g'],
+        conflict: 'ask',
+        wait: false,
+      }),
+    ).toBe(false);
+  });
+});
