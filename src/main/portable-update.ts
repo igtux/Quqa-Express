@@ -162,6 +162,13 @@ export async function cleanUpdates(updates: string): Promise<void> {
 }
 
 /**
+ * The command line is a constant: PowerShell reads the script file named in
+ * QUQA_UPDATE_SCRIPT and runs it, so no path ever appears in an argument.
+ */
+export const SWAP_COMMAND =
+  '$code = @(& ([scriptblock]::Create([IO.File]::ReadAllText($env:QUQA_UPDATE_SCRIPT)))); exit [int]$code[-1]';
+
+/**
  * The helper. Windows PowerShell 5.1 (on every Windows 10 and 11), ASCII only,
  * literal .NET calls only (no wildcard expansion of paths, and no cmdlets from
  * modules, which a PowerShell 7 PSModulePath can break). It reads all its
@@ -183,7 +190,22 @@ export const SWAP_SCRIPT = [
   '$appPid = $env:QUQA_UPDATE_APP_PID',
   '$stubPid = $env:QUQA_UPDATE_STUB_PID',
   "$noStart = $env:QUQA_UPDATE_NO_START -eq '1'",
-  "foreach ($name in @('QUQA_UPDATE_TARGET', 'QUQA_UPDATE_NEW', 'QUQA_UPDATE_PREVIOUS', 'QUQA_UPDATE_SHA256', 'QUQA_UPDATE_LOG', 'QUQA_UPDATE_APP_PID', 'QUQA_UPDATE_STUB_PID', 'QUQA_UPDATE_NO_START', 'QUQA_UPDATE_SCRIPT')) {",
+  '',
+  '# Node puts the processes it starts into a job object that is killed when the',
+  '# app exits; processes started from here are outside it. So this first copy only',
+  '# starts a second PowerShell (no window), which does the work, and waits for it.',
+  "if ($env:QUQA_UPDATE_STAGE -ne 'inner') {",
+  "  $env:QUQA_UPDATE_STAGE = 'inner'",
+  '  $info = [Diagnostics.ProcessStartInfo]::new()',
+  '  $info.FileName = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName',
+  `  $info.Arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "${SWAP_COMMAND}"'`,
+  '  $info.UseShellExecute = $false',
+  '  $info.CreateNoWindow = $true',
+  '  $inner = [Diagnostics.Process]::Start($info)',
+  '  $inner.WaitForExit()',
+  '  return $inner.ExitCode',
+  '}',
+  "foreach ($name in @('QUQA_UPDATE_TARGET', 'QUQA_UPDATE_NEW', 'QUQA_UPDATE_PREVIOUS', 'QUQA_UPDATE_SHA256', 'QUQA_UPDATE_LOG', 'QUQA_UPDATE_APP_PID', 'QUQA_UPDATE_STUB_PID', 'QUQA_UPDATE_NO_START', 'QUQA_UPDATE_SCRIPT', 'QUQA_UPDATE_STAGE')) {",
   "  [Environment]::SetEnvironmentVariable($name, $null, 'Process')",
   '}',
   '',
@@ -265,13 +287,6 @@ export const SWAP_SCRIPT = [
   'return 0',
   '',
 ].join('\r\n');
-
-/**
- * The command line is a constant: PowerShell reads the script file named in
- * QUQA_UPDATE_SCRIPT and runs it, so no path ever appears in an argument.
- */
-export const SWAP_COMMAND =
-  '$code = @(& ([scriptblock]::Create([IO.File]::ReadAllText($env:QUQA_UPDATE_SCRIPT)))); exit [int]$code[-1]';
 
 export interface SwapPlan {
   target: PortableTarget;
@@ -355,10 +370,12 @@ export async function writeSwapScript(launch: SwapLaunch): Promise<void> {
 
 /**
  * Writes the script and starts the helper, which outlives the app (it quits
- * next). Not `detached`: Node starts a detached child with DETACHED_PROCESS
- * (no console), and Windows PowerShell 5.1 then exits 0 without running
- * anything. A plain child gets its own hidden console, and Windows does not
- * end it when the app exits (test/windows/portable-swap.test.ts checks both).
+ * next). Not `detached`: Node starts a detached child without a console
+ * (DETACHED_PROCESS) and Windows PowerShell 5.1 then does not run at all. A
+ * plain child gets a hidden console but sits in Node's kill-on-close job
+ * object, so the script's first copy starts a second one outside the job
+ * (the job allows silent breakaway) and that one does the swap
+ * (test/windows/portable-swap.test.ts checks it survives its parent).
  */
 export async function startSwapHelper(launch: SwapLaunch, cwd: string): Promise<ChildProcess> {
   await writeSwapScript(launch);
@@ -366,7 +383,6 @@ export async function startSwapHelper(launch: SwapLaunch, cwd: string): Promise<
     const child = spawn(launch.command, launch.args, {
       cwd,
       env: launch.env,
-      detached: true,
       stdio: 'ignore',
       windowsHide: true,
     });

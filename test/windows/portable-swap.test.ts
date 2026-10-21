@@ -144,50 +144,6 @@ describe.skipIf(!windows)('portable swap helper on Windows', () => {
     expect(existsSync(download)).toBe(false);
   });
 
-  it('diagnostic: detached variants', async () => {
-    copyFileSync(join(system32, 'HOSTNAME.EXE'), download);
-    const launch = swapLaunch(
-      {
-        target,
-        download,
-        sha256: '0'.repeat(64),
-        appPid: 999_999_999,
-        stubPid: null,
-        noStart: true,
-      },
-      process.env,
-    );
-    await writeSwapScript(launch);
-    const run = (args: string[], hide: boolean) =>
-      new Promise<string>((resolve) => {
-        const child = spawn(launch.command, args, {
-          env: launch.env,
-          cwd: target.updates,
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: hide,
-        });
-        child.on('error', (e) => resolve(`spawn error ${e.message}`));
-        child.on('exit', (code) => resolve(`code=${code} log=${log().length}`));
-      });
-    const noStyle = launch.args.filter((a) => a !== '-WindowStyle' && a !== 'Hidden');
-    const results = {
-      full: await run(launch.args, true),
-      fullShown: await run(launch.args, false),
-      noStyle: await run(noStyle, true),
-      exit7: await run(['-NoProfile', '-NonInteractive', '-Command', 'exit 7'], true),
-      exit7Style: await run(
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', 'exit 7'],
-        true,
-      ),
-      exit7File: await run(
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', 'exit 7'],
-        true,
-      ),
-    };
-    expect(results).toEqual({});
-  });
-
   it('changes nothing when the download does not match the checksum', async () => {
     copyFileSync(join(system32, 'HOSTNAME.EXE'), download);
     const oldHash = await sha256File(target.exe);
