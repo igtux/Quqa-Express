@@ -19,7 +19,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, open, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { join, win32 } from 'node:path';
 
 /** The folder next to the exe that holds the portable profile (src/main/index.ts). */
@@ -252,7 +252,7 @@ export const SWAP_SCRIPT = [
   "  } catch { Write-Log ('could not start ' + $target + ': ' + $_.Exception.Message); return $false }",
   '}',
   '',
-  "Write-Log 'waiting for quqa-express to close'",
+  "Write-Log 'waiting for quqa-express to close'", // HELPER_STARTED
   'Wait-Exit $appPid',
   'Wait-Exit $stubPid',
   'if (-not (Test-Hash $new)) {',
@@ -377,16 +377,42 @@ export async function writeSwapScript(launch: SwapLaunch): Promise<void> {
  * (the job allows silent breakaway) and that one does the swap
  * (test/windows/portable-swap.test.ts checks it survives its parent).
  */
-export async function startSwapHelper(launch: SwapLaunch, cwd: string): Promise<ChildProcess> {
+/** The helper's first log line, written by the second PowerShell once it runs outside the job. */
+export const HELPER_STARTED = 'waiting for quqa-express to close';
+
+export async function startSwapHelper(
+  launch: SwapLaunch,
+  cwd: string,
+  timeoutMs = 20_000,
+): Promise<ChildProcess> {
   await writeSwapScript(launch);
-  return await new Promise<ChildProcess>((resolve, reject) => {
-    const child = spawn(launch.command, launch.args, {
+  const logPath = launch.env['QUQA_UPDATE_LOG'] as string;
+  const before = await stat(logPath).then(
+    (s) => s.size,
+    () => 0,
+  );
+  const child = await new Promise<ChildProcess>((resolve, reject) => {
+    const c = spawn(launch.command, launch.args, {
       cwd,
       env: launch.env,
       stdio: 'ignore',
       windowsHide: true,
     });
-    child.once('error', reject);
-    child.once('spawn', () => resolve(child));
+    c.once('error', reject);
+    c.once('spawn', () => resolve(c));
   });
+  // Until the second PowerShell runs, quitting the app would kill the first
+  // one (and with it the update), so wait for its first log line.
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const text = await readFile(logPath).then(
+      (b) => b.subarray(before).toString('utf8'),
+      () => '',
+    );
+    if (text.includes(HELPER_STARTED)) return child;
+    if (child.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  child.kill();
+  throw new Error('The update helper did not start');
 }

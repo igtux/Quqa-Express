@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HELPER_STARTED,
   portableTarget,
   sha256File,
   startSwapHelper,
@@ -103,15 +104,24 @@ describe.skipIf(!windows)('portable swap helper on Windows', () => {
         [
           "import { spawn } from 'node:child_process';",
           'const l = JSON.parse(process.env.QUQA_TEST_LAUNCH);',
+          "import { readFileSync } from 'node:fs';",
           "const c = spawn(l.command, l.args, { env: l.env, cwd: l.cwd, stdio: 'ignore', windowsHide: true });",
-          "c.once('spawn', () => process.exit(0));",
+          // Like startSwapHelper: wait for the helper's first log line, then exit at once.
+          'const t = setInterval(() => {',
+          "  let text = ''; try { text = readFileSync(l.env.QUQA_UPDATE_LOG, 'utf8'); } catch {}",
+          '  if (text.includes(l.started)) { clearInterval(t); process.exit(0); }',
+          '}, 100);',
         ].join('\n'),
       ],
       {
         stdio: 'ignore',
         env: {
           ...process.env,
-          QUQA_TEST_LAUNCH: JSON.stringify({ ...launch, cwd: target.updates }),
+          QUQA_TEST_LAUNCH: JSON.stringify({
+            ...launch,
+            cwd: target.updates,
+            started: HELPER_STARTED,
+          }),
         },
       },
     );
