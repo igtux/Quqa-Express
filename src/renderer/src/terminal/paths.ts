@@ -34,3 +34,17 @@ export function insideRoots(path: string, roots: readonly string[]): boolean {
   if (roots.length === 0) return true;
   return roots.some((root) => root === '/' || path === root || path.startsWith(`${root}/`));
 }
+
+/**
+ * Local paths typed into a local terminal: on Windows in double quotes when
+ * they have spaces or characters PowerShell and cmd treat specially; POSIX
+ * shells get single quotes.
+ */
+export function localPaths(paths: readonly string[], windows: boolean): string {
+  return paths
+    .map((path) => {
+      if (!windows) return shellQuote(path);
+      return /[\s&()^%!'"`;,$@{}[\]]/.test(path) ? `"${path.replaceAll('"', '')}"` : path;
+    })
+    .join(' ');
+}

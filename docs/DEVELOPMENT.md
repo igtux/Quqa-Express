@@ -46,7 +46,7 @@ Windows.
 | `pnpm test`      | Vitest: unit tests, plus `test/e2e` when an SSH server is set  |
 | `pnpm test:e2e`  | only the SSH engine end-to-end tests                           |
 | `pnpm test:ui`   | builds, then every Playwright `_electron` test in `test/ui`    |
-| `pnpm test:smoke`| only `test/ui/smoke.spec.ts` (start-up, vault, About, restart) |
+| `pnpm test:smoke`| only `test/ui/smoke.spec.ts` (start-up, vault, a local terminal, About, restart) |
 | `pnpm dist:win`  | unsigned installer + portable `.exe` + `SHA256SUMS.txt` in `release/<ver>/` |
 | `pnpm format`    | Prettier, writing                                              |
 
@@ -72,6 +72,17 @@ fake agent on a Unix socket and an in-process ssh2 server.
 The test server accepts the user `quqa` with the publicly known password
 `quqa-test-password`; never expose it. Key-login tests generate their keys at
 run time and install them over a password session.
+
+`test/e2e/local.e2e.test.ts` needs no server and always runs. It starts
+the shells main would detect, through the real node-pty, with main's
+arguments and environment. On Linux that is the login shell: Georgian output
+as UTF-8 bytes, `stty size` after a resize, `TERM`/`COLORTERM` and the exit
+code. On Windows (CI) it runs PowerShell 7, Windows PowerShell and cmd through
+ConPTY: `Write-Output` of Georgian, console encodings `utf-8/utf-8`, code page
+65001 and exit codes. node-pty ships prebuilt N-API binaries for every
+platform (`allowBuilds: node-pty: false`), so neither the container nor the
+Wine cross-build compiles anything. The Wine build packs the same
+`prebuilds/win32-x64` files as the Windows CI build.
 
 Engine and vault tests create their vaults in temporary folders with small
 Argon2id parameters; nothing touches your real app data.
@@ -131,8 +142,10 @@ QUQA_APP_EXECUTABLE=release/smoke/win-unpacked/quqa-express.exe pnpm test:smoke
 `.github/workflows/ci.yml` runs on every push to `main` and on pull requests:
 `pnpm check` on Ubuntu (with the Docker SSH server, so the end-to-end tests
 run; plus `pnpm audit --audit-level high` and the UI tests under Xvfb) and on
-Windows (the end-to-end tests skip there), then a Windows job packages the
-app, runs the smoke test against it and uploads the installer, the portable
+Windows (the SSH end-to-end tests skip there; the local terminal ones run
+pwsh, Windows PowerShell and cmd), then a Windows job packages the app, runs
+the smoke test against it (which opens a local PowerShell tab, so the
+unpacked node-pty is exercised in the shipped layout) and uploads the installer, the portable
 exe and the checksums as an artifact. Job logs need a GitHub login, so a
 failing test run also writes one annotation listing every failed test
 (`scripts/ci-failures.mjs`), readable through the public API:
@@ -178,11 +191,12 @@ src/preload/   contextBridge API (window.quqa), CommonJS for the sandbox
 src/engine/    SSH engine (ssh2) run as a utilityProcess; plain Node, unit-testable;
                remote-files / transfers (SFTP), forwards + socks, jump, agent
 src/engine/vault/  encrypted vault (format and crypto: docs/adr/0002-vault.md)
+src/pty/       local terminals (node-pty) run as a second utilityProcess (ADR 0007)
 src/shared/    IPC contract: protocol.ts (no deps), ipc.ts (renderer ↔ main schemas, AppCalls),
                engine-protocol.ts (main ↔ engine), csp.ts
 src/renderer/  React UI: hosts/ (hosts screen, forms, ssh config import),
                terminal/ (xterm session, workspace, dock model, themes), components/
-test/e2e/      engine against a real SSH server
+test/e2e/      engine against a real SSH server; local.e2e: real shells through node-pty
 test/ui/       Playwright: smoke (also on the packaged Windows build), app (with SSH),
                look (screenshots of both themes, Georgian, update panel)
 docker/        dev image, compose stack, test SSH server

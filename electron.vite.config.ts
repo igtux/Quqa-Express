@@ -37,6 +37,8 @@ export default defineConfig({
         input: {
           index: resolve('src/main/index.ts'),
           engine: resolve('src/engine/index.ts'),
+          // Local terminals (node-pty), a utilityProcess of their own (ADR 0007).
+          pty: resolve('src/pty/index.ts'),
         },
       },
     },

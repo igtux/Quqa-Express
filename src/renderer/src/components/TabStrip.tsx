@@ -8,12 +8,12 @@
  * The favorites bar follows Jarvis NG's (apps/web/src/terminal/SessionsDock.tsx,
  * `tsd-favs`), same owner; desktop tabs are new.
  */
-import { useState, useSyncExternalStore, type DragEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from 'react';
 import type { Tab, Workspace } from '../terminal/workspace.js';
 import { MAX_FAVORITES_SHOWN } from '../terminal/workspace.js';
 import { summarize } from '../terminal/dockModel.js';
 import { Icon } from './icons.js';
-import { STATUS_CLASS } from './TerminalView.js';
+import { LOCAL_TOOLTIP, STATUS_CLASS } from './TerminalView.js';
 import { UpdateBadge } from './UpdatePanel.js';
 
 export function TabStrip({
@@ -93,6 +93,7 @@ export function TabStrip({
         >
           <Icon name="plus" />
         </button>
+        <LocalButton workspace={workspace} />
       </div>
       <div className="app-bar-actions">
         <UpdateBadge />
@@ -216,6 +217,7 @@ function TabButton({
       })()}
     >
       <span className={`app-tab-dot ${STATUS_CLASS[state]}${busy ? ' busy' : ''}`} />
+      {first.isLocal && <Icon name="terminal" className="app-tab-local" />}
       {renaming ? (
         <input
           className="app-tab-rename"
@@ -283,5 +285,133 @@ export function FavoritesBar({ workspace }: { workspace: Workspace }) {
         </button>
       ))}
     </nav>
+  );
+}
+
+/**
+ * "New local terminal" (Ctrl+Shift+`): the default shell at a click; the
+ * arrow lists every shell main found, a folder to start in, and the default.
+ */
+function LocalButton({ workspace }: { workspace: Workspace }) {
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const shells = workspace.shells;
+  if (shells.length === 0) return null;
+  const current = shells.find((s) => s.id === workspace.defaultShell) ?? shells[0];
+  return (
+    <div className="app-local">
+      <button
+        type="button"
+        className="app-tab-new app-local-open"
+        title={`New local terminal: ${current?.name ?? ''} (Ctrl+Shift+\`)`}
+        aria-label="New local terminal"
+        onClick={() => workspace.openLocal()}
+      >
+        <Icon name="terminal" />
+      </button>
+      <button
+        type="button"
+        className="app-tab-new app-local-more"
+        title="Local shells"
+        aria-label="Local shells"
+        aria-haspopup="menu"
+        aria-expanded={menu !== null}
+        onClick={(event) => {
+          const box = event.currentTarget.getBoundingClientRect();
+          setMenu(menu ? null : { x: box.left - 120, y: box.bottom + 4 });
+        }}
+      >
+        <Icon name="chevronDown" />
+      </button>
+      {menu && <LocalMenu workspace={workspace} at={menu} onClose={() => setMenu(null)} />}
+    </div>
+  );
+}
+
+function LocalMenu({
+  workspace,
+  at,
+  onClose,
+}: {
+  workspace: Workspace;
+  at: { x: number; y: number };
+  onClose(): void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector('button')?.focus();
+    const onDown = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [onClose]);
+  const shells = workspace.shells;
+  const chosen = workspace.defaultShell ?? shells[0]?.id ?? null;
+  const left = Math.max(8, Math.min(at.x, window.innerWidth - 290));
+  return (
+    <div
+      ref={ref}
+      className="terminal-card-menu local-menu"
+      role="menu"
+      aria-label="Local shells"
+      style={{ left, top: at.y }}
+    >
+      <div className="terminal-card-menu-title" title={LOCAL_TOOLTIP}>
+        Local terminal · no tmux
+      </div>
+      {shells.map((shell) => (
+        <button
+          key={shell.id}
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            onClose();
+            workspace.openLocal({ shellId: shell.id });
+          }}
+        >
+          {shell.name}
+          {shell.id === chosen && <span className="local-menu-default">default</span>}
+        </button>
+      ))}
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onClose();
+          void workspace.openLocalInFolder();
+        }}
+      >
+        In a folder…
+      </button>
+      {shells.length > 1 && (
+        <label className="local-menu-setting">
+          <span>Default shell</span>
+          <select
+            aria-label="Default shell"
+            value={chosen ?? ''}
+            onChange={(event) => {
+              const shell = shells.find((s) => s.id === event.target.value);
+              if (shell) void workspace.setDefaultShell(shell.id);
+            }}
+          >
+            {shells.map((shell) => (
+              <option key={shell.id} value={shell.id}>
+                {shell.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </div>
   );
 }

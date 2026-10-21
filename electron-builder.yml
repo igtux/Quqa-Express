@@ -10,6 +10,14 @@ files:
   - out/**/*
   - package.json
   - '!**/*.map'
+  # node-pty (local terminals, ADR 0007): only its JavaScript, its licence and
+  # the prebuilt N-API binaries run; sources, debug symbols and arm64 builds
+  # stay out. Each platform below drops the other platforms' binaries.
+  - '!node_modules/node-pty/{src,deps,third_party,scripts,typings}/**'
+  - '!node_modules/node-pty/binding.gyp'
+  - '!node_modules/node-pty/prebuilds/**/*.pdb'
+  - '!node_modules/node-pty/prebuilds/*-arm64/**'
+  - '!node_modules/node-addon-api/**'
 asar: true
 # Licences of the bundled fonts (THIRD_PARTY_NOTICES.md) next to app.asar.
 extraResources:
@@ -23,7 +31,12 @@ extraResources:
 # from inside app.asar (the engine points spawn at the unpacked copy).
 asarUnpack:
   - node_modules/ssh2/util/pagent.exe
+  # node-pty loads native modules, starts a worker thread and (Windows) runs
+  # OpenConsole.exe next to itself: all real files (src/pty/node-pty.ts).
+  - node_modules/node-pty/**
 # ssh2's optional native add-ons are not built; it runs in pure JavaScript.
+# node-pty ships prebuilt N-API binaries (one build for every Electron), so
+# nothing is compiled or rebuilt, natively or in the Wine cross-build.
 npmRebuild: false
 nodeGypRebuild: false
 extraMetadata:
@@ -41,6 +54,8 @@ electronFuses:
   grantFileProtocolExtraPrivileges: false
 win:
   icon: build/icon.ico
+  files:
+    - '!node_modules/node-pty/prebuilds/{darwin,linux}-*/**'
   target:
     - target: nsis
       arch: [x64]
@@ -70,9 +85,13 @@ portable:
   # Keeps its profile in "quqa-express-data" next to the .exe (src/main/index.ts).
   artifactName: ${name}-${version}-portable.${ext}
 linux:
+  files:
+    - '!node_modules/node-pty/prebuilds/{darwin,win32}-*/**'
   target: [AppImage]
   category: System
 mac:
+  files:
+    - '!node_modules/node-pty/prebuilds/{linux,win32}-*/**'
   target: [dmg]
   category: public.app-category.developer-tools
   identity: null

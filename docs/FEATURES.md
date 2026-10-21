@@ -264,6 +264,7 @@ Short names used below:
 | Window size, position and maximized state remembered; one instance (a second start focuses the window) | — | v1 | **Built (Phase 5)**; single instance since Phase 1. |
 | Update check: badge, release notes, Update now (installer verified against SHA256SUMS.txt) / Later / Skip | — | v1 | **Built (0.1.0-beta.5, ADR 0006):** on by default, opt-out in About. **0.1.0-beta.7:** the portable exe updates itself (verified download, swap on restart, same file name, `updates\previous.exe` kept; download page if its folder is read-only); downloads can be cancelled. |
 | Build provenance attestations, SBOM, code signing | — | later | Left out to keep releases simple. |
+| Local terminals: PowerShell 7 / Windows PowerShell / Command Prompt / WSL (login shell on macOS and Linux) in a tab, for running agents (Claude Code, Codex) locally | — | v1 | **Built (0.1.0-beta.9, ADR 0007):** node-pty (ConPTY) in its own utilityProcess; the renderer opens a shell by id (main detects them), only after a key press or click; UTF-8 consoles (Georgian both ways); same look, paste (images saved under the profile's `uploads`, paths typed), splits, favorites, dock, switcher, search, bell and agent notifications; title from the program; exit code and Start again; Ctrl+Shift+\` and a tab-strip button with a shell menu, "In a folder…" and the default shell. No tmux, no reconnect, not reopened after a restart. |
 
 ## v1 at a glance
 

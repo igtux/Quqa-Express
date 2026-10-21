@@ -137,6 +137,7 @@ test('the page is served from app://, has no Node access, a strict CSP and only 
       'onNotificationClick',
       'onVaultChange',
       'openExternal',
+      'openLocal',
       'reconnect',
       'resize',
       'testHooks',

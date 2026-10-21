@@ -44,7 +44,16 @@ the Georgian blocks (`styles/fonts.css`).
 
 ## npm packages
 
-The JavaScript dependencies (Electron, React, xterm.js, ssh2, @noble/*,
-typebox and their dependencies) are listed with their licences in
+The JavaScript dependencies (Electron, React, xterm.js, ssh2, node-pty,
+@noble/*, typebox and their dependencies) are listed with their licences in
 `pnpm-lock.yaml` and in each package's own folder. All are MIT, ISC, BSD or
 Apache-2.0 licensed.
+
+### node-pty (local terminals)
+
+- Pseudo-terminals for local shells (ADR 0007), with its prebuilt native
+  modules. On Windows it also ships `conpty.dll` and `OpenConsole.exe`, the
+  console host of Windows Terminal (Microsoft, MIT).
+- Copyright (c) 2012-2015 Christopher Jeffrey, (c) 2016 Daniel Imms,
+  (c) 2018 Microsoft Corporation. Licence: MIT (`licenses/MIT-node-pty.txt`;
+  also `node_modules/node-pty/LICENSE` inside the app).

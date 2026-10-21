@@ -382,6 +382,28 @@ instead of a zip.
 - "Forgot password? Start over": the vault moves to
   `vault-backups/<time>/`.
 
+## 0.1.0-beta.9: local terminals
+
+**Status: done.** Design: ADR 0007.
+
+- A "Local terminal" tab type next to SSH tabs, so agents (Claude Code,
+  Codex) can run on this computer. Main detects PowerShell 7, Windows
+  PowerShell, Command Prompt and WSL (with a distribution); on macOS and
+  Linux, the login shell.
+- node-pty `1.2.0-beta.15` (prebuilt N-API binaries, nothing compiled) in its
+  own utilityProcess, with schema-checked commands, flow control and exit
+  codes. The renderer opens a shell by id, after a user gesture only.
+- PowerShell and cmd start with UTF-8 consoles. Windows CI checks Georgian
+  output bytes, the console encodings and exit codes for pwsh, Windows
+  PowerShell and cmd (`test/e2e/local.e2e.test.ts`). The packaged smoke test
+  opens a local tab.
+- Same terminal UX as SSH tabs. Image paste saves to `<profile>/uploads`
+  and types the path. Dropped or copied files type their paths. The title
+  comes from the program. "Start again" appears after exit.
+- Open: local tabs are not saved in the layout or as favorites across
+  restarts. There is no per-tab environment or profile picker. Windows
+  Terminal profiles are not imported.
+
 ---
 
 ## After v1 (v1.x / later)

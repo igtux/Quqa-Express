@@ -14,6 +14,10 @@ declare global {
       tmux(): string | null;
       tabs(): number;
       panes(): number;
+      /** The active terminal is a local shell. */
+      local(): boolean;
+      /** The window title its program set. */
+      title(): string;
       /** Switch the active terminal to xterm's DOM renderer. */
       useDomRenderer(): void;
     };

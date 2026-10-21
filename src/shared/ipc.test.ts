@@ -1,6 +1,7 @@
 import Value from 'typebox/value';
 import { describe, expect, it } from 'vitest';
 import { EngineCalls, EngineCommand } from './engine-protocol.js';
+import { PtyCommand } from './pty-protocol.js';
 import {
   AckMessage,
   AppCalls,
@@ -8,6 +9,7 @@ import {
   ConnectRequest,
   HostKeyAnswer,
   InputMessage,
+  LocalOpenRequest,
   MAX_CLIPBOARD_LENGTH,
   MAX_INPUT_LENGTH,
   MAX_PRIVATE_KEY_LENGTH,
@@ -510,5 +512,70 @@ describe('Phase 4 calls', () => {
         wait: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe('local terminals (ADR 0007)', () => {
+  const open = { shellId: 'pwsh', folder: null, cols: 120, rows: 30 };
+  const check = (method: keyof typeof AppCalls, params: unknown) =>
+    Value.Check(AppCalls[method].params, params);
+
+  it('opens a detected shell by id, in the home folder or a chosen folder by token', () => {
+    expect(Value.Check(LocalOpenRequest, open)).toBe(true);
+    for (const shellId of ['pwsh', 'powershell', 'cmd', 'wsl', 'login']) {
+      expect(Value.Check(LocalOpenRequest, { ...open, shellId })).toBe(true);
+    }
+    expect(Value.Check(LocalOpenRequest, { ...open, folder: `d${'a1'.repeat(12)}` })).toBe(true);
+  });
+
+  it('never takes a program, a command line, arguments or a path from the renderer', () => {
+    const hostile: unknown[] = [
+      { ...open, shellId: 'C:\\Windows\\System32\\cmd.exe' },
+      { ...open, shellId: 'pwsh -c calc' },
+      { ...open, shellId: 'bash' },
+      { ...open, command: 'calc.exe' },
+      { ...open, args: ['-c', 'rm -rf ~'] },
+      { ...open, env: { PATH: '/tmp' } },
+      { ...open, cwd: 'C:\\' },
+      { ...open, folder: 'C:\\Users' },
+      { ...open, folder: '/etc' },
+      { ...open, folder: `g${'a1'.repeat(12)}` },
+      { ...open, cols: 0 },
+      { shellId: 'pwsh', folder: null },
+    ];
+    for (const request of hostile) expect(Value.Check(LocalOpenRequest, request)).toBe(false);
+  });
+
+  it('checks the local calls and the default-shell setting', () => {
+    expect(check('local.shells', {})).toBe(true);
+    expect(check('local.shells', { platform: 'win32' })).toBe(false);
+    expect(check('local.chooseFolder', {})).toBe(true);
+    expect(check('local.chooseFolder', { path: 'C:\\' })).toBe(false);
+    expect(check('local.pasteClipboard', { sessionId: 's3' })).toBe(true);
+    expect(check('local.pasteClipboard', { sessionId: 's3', path: '/tmp/x' })).toBe(false);
+    expect(check('local.droppedPaths', { grants: [`g${'0'.repeat(24)}`] })).toBe(true);
+    expect(check('local.droppedPaths', { grants: ['/etc/passwd'] })).toBe(false);
+    expect(check('app.setSettings', { localShell: 'cmd' })).toBe(true);
+    expect(check('app.setSettings', { localShell: null })).toBe(true);
+    expect(check('app.setSettings', { localShell: 'C:\\evil.exe' })).toBe(false);
+  });
+
+  it('lets the PTY process receive a program and its arguments only from main', () => {
+    const spawn = {
+      type: 'spawn',
+      sessionId: 's1',
+      file: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+      args: ['-NoLogo'],
+      cwd: 'C:\\Users\\me',
+      env: { TERM: 'xterm-256color' },
+      cols: 80,
+      rows: 24,
+    };
+    expect(Value.Check(PtyCommand, spawn)).toBe(true);
+    expect(Value.Check(PtyCommand, { ...spawn, shell: true })).toBe(false);
+    expect(Value.Check(PtyCommand, { type: 'kill', sessionId: 's1' })).toBe(true);
+    expect(Value.Check(PtyCommand, { type: 'kill', sessionId: 's1', signal: 'SIGKILL' })).toBe(
+      false,
+    );
   });
 });

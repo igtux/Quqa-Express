@@ -1873,3 +1873,71 @@
   background: #0b0d12;
   color: #e5e7eb;
 }
+
+/* Local terminals (ADR 0007): the tab strip's button and shell menu, the badge. */
+.app-local {
+  display: flex;
+  align-items: center;
+  align-self: center;
+  flex-shrink: 0;
+}
+
+.app-local .app-local-open {
+  border-radius: 6px 0 0 6px;
+}
+
+.app-local .app-local-more {
+  width: 16px;
+  border-radius: 0 6px 6px 0;
+}
+
+.app-local .app-local-more svg {
+  width: 12px;
+  height: 12px;
+}
+
+.app-tab-local {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: #5eead4;
+}
+
+.terminal-badge.local {
+  background: rgba(20, 184, 166, 0.15);
+  color: #5eead4;
+}
+
+.local-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.local-menu-default {
+  font-size: 0.65rem;
+  color: #9ca3af;
+}
+
+.local-menu-setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px 4px;
+  margin-top: 2px;
+  border-top: 1px solid #232838;
+  color: #9ca3af;
+  font-size: 0.72rem;
+}
+
+.local-menu-setting select {
+  max-width: 150px;
+  background: #0d1017;
+  color: #e5e7eb;
+  border: 1px solid #2b3140;
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 0.75rem;
+}

@@ -47,6 +47,11 @@ export const Channel = {
    * the preload reads it from a real drop with `webUtils.getPathForFile`.
    */
   grantFiles: 'files:grant',
+  /**
+   * invoke: open a local terminal (a shell main detected, by id) → { sessionId }.
+   * Its input, resize, ack and disconnect use the SSH session channels.
+   */
+  openLocal: 'local:open',
   /** send: open an http(s) link in the system browser (main checks it) */
   openExternal: 'window:open-external',
 } as const;

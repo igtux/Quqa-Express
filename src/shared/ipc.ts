@@ -215,6 +215,46 @@ export const NotifyMessage = Type.Object(
 );
 export type NotifyMessage = Static<typeof NotifyMessage>;
 
+/* ----- Local terminals (ADR 0007) ------------------------------------------ */
+
+/**
+ * The shells a local terminal can run, by id. Main detects which exist and
+ * maps an id to a program and its arguments; the renderer never names a
+ * program, an argument or a path.
+ */
+export const SHELL_IDS = ['pwsh', 'powershell', 'cmd', 'wsl', 'login'] as const;
+export type ShellIdValue = (typeof SHELL_IDS)[number];
+export const ShellId = Type.Union([
+  Type.Literal('pwsh'),
+  Type.Literal('powershell'),
+  Type.Literal('cmd'),
+  Type.Literal('wsl'),
+  Type.Literal('login'),
+]);
+export type ShellId = Static<typeof ShellId>;
+
+/** A folder the user chose in main's dialog, by token (main keeps the path). */
+export const FOLDER_TOKEN_PATTERN = '^d[0-9a-f]{24}$';
+export const FolderToken = Type.String({ pattern: FOLDER_TOKEN_PATTERN });
+
+export const LocalShellInfo = Type.Object(
+  { id: ShellId, name: ShortText(64) },
+  { additionalProperties: false },
+);
+export type LocalShellInfo = Static<typeof LocalShellInfo>;
+
+/** Open a local terminal: a detected shell, in the home folder (null) or a chosen one. */
+export const LocalOpenRequest = Type.Object(
+  {
+    shellId: ShellId,
+    folder: Type.Union([FolderToken, Type.Null()]),
+    cols: Cols,
+    rows: Rows,
+  },
+  { additionalProperties: false },
+);
+export type LocalOpenRequest = Static<typeof LocalOpenRequest>;
+
 /* ----- Vault, keys and host keys (one `app:call` channel) ------------------ */
 
 export const VaultMode = Type.Union([
@@ -569,6 +609,8 @@ export const AppSettings = obj({
   autoUpdate: Type.Boolean(),
   /** The window uses the OS's translucent material (Windows 11 acrylic). Read-only. */
   material: Type.Boolean(),
+  /** The shell new local terminals start; null: the first one detected. */
+  localShell: Type.Union([ShellId, Type.Null()]),
 });
 export type AppSettings = Static<typeof AppSettings>;
 
@@ -694,7 +736,11 @@ export const AppCalls = {
   },
   'app.settings': { params: Empty, result: AppSettings },
   'app.setSettings': {
-    params: obj({ theme: Type.Optional(AppTheme), autoUpdate: Type.Optional(Type.Boolean()) }),
+    params: obj({
+      theme: Type.Optional(AppTheme),
+      autoUpdate: Type.Optional(Type.Boolean()),
+      localShell: Type.Optional(Type.Union([ShellId, Type.Null()])),
+    }),
     result: AppSettings,
   },
   'updates.status': { params: Empty, result: UpdateState },
@@ -883,6 +929,42 @@ export const AppCalls = {
       keys: Type.Array(AgentKey, { maxItems: 100 }),
     }),
   },
+  /* Local terminals (ADR 0007); opening one is `Channel.openLocal`. */
+  /** The shells found on this computer, and the one new local terminals start. */
+  'local.shells': {
+    params: Empty,
+    result: obj({
+      shells: Type.Array(LocalShellInfo, { maxItems: SHELL_IDS.length }),
+      defaultShell: Type.Union([ShellId, Type.Null()]),
+    }),
+  },
+  /** Main asks for a folder to start a local terminal in (null: cancelled). */
+  'local.chooseFolder': {
+    params: Empty,
+    result: obj({
+      folder: Type.Union([obj({ token: FolderToken, name: ShortText(255) }), Type.Null()]),
+    }),
+  },
+  /**
+   * Ctrl+V of an image or copied files in a local terminal: main reads the
+   * clipboard, saves an image under the profile's `uploads` folder, and
+   * returns the local paths to type.
+   */
+  'local.pasteClipboard': {
+    params: obj({ sessionId: SessionId }),
+    result: obj({
+      kind: Type.Union([Type.Literal('none'), Type.Literal('image'), Type.Literal('files')]),
+      paths: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 100 }),
+    }),
+  },
+  /** Files dropped on a local terminal (by grant): their paths, to type. */
+  'local.droppedPaths': {
+    params: obj({
+      grants: Type.Array(Type.String({ pattern: GRANT_PATTERN }), { minItems: 1, maxItems: 100 }),
+    }),
+    result: obj({ paths: Type.Array(Type.String({ maxLength: 4096 }), { maxItems: 100 }) }),
+  },
+
   /** Appends the key's public half to ~/.ssh/authorized_keys over SFTP (once). */
   'keys.install': {
     params: obj({ sessionId: SessionId, keyId: KeyId }),
@@ -897,6 +979,8 @@ export type CallValue<M extends AppMethod> = Static<(typeof AppCalls)[M]['result
 /** What the preload script exposes as `window.quqa`. */
 export interface QuqaApi {
   connect(request: ConnectRequest): Promise<ConnectResult>;
+  /** Opens a local terminal (a detected shell by id); main needs a recent key press or click. */
+  openLocal(request: LocalOpenRequest): Promise<ConnectResult>;
   input(message: InputMessage): void;
   resize(message: ResizeMessage): void;
   ack(message: AckMessage): void;

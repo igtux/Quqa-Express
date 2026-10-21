@@ -4,6 +4,32 @@ All notable changes to quqa-express. Each release's section is also the
 start of its GitHub release notes and of what the in-app update panel shows
 (`scripts/changelog.mjs`, `.github/workflows/release.yml`).
 
+## [0.1.0-beta.9] - 2026-10-22
+
+### Added
+
+- **Local terminals.** Open PowerShell on this computer in a tab, next to
+  your SSH tabs, to run agents such as Claude Code or Codex locally. Click
+  the **>_** button in the tab bar or press **Ctrl+Shift+`** (Ctrl+Shift+T
+  on the Hosts screen). Its arrow lists the shells found on this computer:
+  PowerShell 7, Windows PowerShell, Command Prompt, and WSL when a
+  distribution is installed. It also has **In a folder…** and the
+  **default shell**.
+- Local tabs work like SSH tabs: colour schemes and fonts, Georgian in and
+  out (the console is switched to UTF-8), Ctrl+V on any layout with the
+  multi-line warning, splits, favorites, the sessions dock and switcher,
+  scrollback search, and the bell and "agent finished" notifications. The
+  tab takes its title from the program.
+- Pasting an image into a local tab saves it in the app's `uploads` folder
+  and types its path. Copied or dropped files have their paths typed.
+- When the shell exits, the tab shows the exit code and **Start again**.
+
+### Notes
+
+- Local tabs have no tmux: closing one ends the shell and the programs in
+  it, and local tabs are not reopened after a restart.
+- A local shell runs as you, with your rights, like Windows Terminal (ADR 0007).
+
 ## [0.1.0-beta.8] - 2026-10-22
 
 ### Fixed

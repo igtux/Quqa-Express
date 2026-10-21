@@ -18,7 +18,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal as XTerm } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import type { Auth, Osc52Policy, QuqaApi } from '../../../shared/ipc.js';
+import type { Auth, Osc52Policy, QuqaApi, ShellId } from '../../../shared/ipc.js';
 import {
   FATAL_ERRORS,
   type PromptKind,
@@ -37,6 +37,7 @@ import {
 import { clipboardAction } from './keys.js';
 import { parseOsc52 } from './osc52.js';
 import { pasteRisks, type PasteRisk } from './paste.js';
+import { printableTitle } from './title.js';
 import {
   computeFontSize,
   fontById,
@@ -128,6 +129,8 @@ export interface ConnSnapshot {
   historyMode: boolean;
   /** A short notice (e.g. the tmux session had ended and a new one started). */
   notice: string | null;
+  /** The window title the program set (OSC 0/2), printable; empty: none. */
+  title: string;
 }
 
 /** A saved host (the engine takes address, user and login from it) or an ad-hoc target. */
@@ -141,6 +144,16 @@ export type Target =
       /** No secrets: a key id, or "password" (the engine asks or uses the saved one). */
       auth: Auth;
       title: string;
+    }
+  | {
+      /** A shell on this computer (ADR 0007): no tmux, no reconnect, no SFTP. */
+      kind: 'local';
+      shellId: ShellId;
+      /** The shell's name ("PowerShell 7"). */
+      title: string;
+      /** A folder chosen in main's dialog, by token (null: the home folder). */
+      folder: string | null;
+      folderName: string | null;
     };
 
 export interface SessionCallbacks {
@@ -306,6 +319,7 @@ export class TerminalSession {
       history: false,
       historyMode: false,
       notice: null,
+      title: '',
     };
     this.activity = new ActivityTracker({
       busy: (busy) => {
@@ -382,6 +396,8 @@ export class TerminalSession {
         this.callbacks.onBell?.(this);
       }
     });
+    // A program's window title names a local tab (PowerShell's path, an agent's task).
+    this.term.onTitleChange((title) => this.update({ title: printableTitle(title) }));
     this.term.onScroll(() => this.checkScrolled());
     this.term.onWriteParsed(() => this.checkScrolled());
 
@@ -465,6 +481,11 @@ export class TerminalSession {
 
   get hostId(): string | null {
     return this.target.kind === 'host' ? this.target.hostId : null;
+  }
+
+  /** A local shell rather than an SSH session. */
+  get isLocal(): boolean {
+    return this.target.kind === 'local';
   }
 
   get isDisposed(): boolean {
@@ -731,24 +752,33 @@ export class TerminalSession {
     if (this.started) return;
     this.started = true;
     this.fitNow();
-    this.update({ state: 'connecting', statusText: 'Connecting…', reason: '', errorCode: null });
+    this.update({
+      state: 'connecting',
+      statusText: this.isLocal ? 'Starting…' : 'Connecting…',
+      reason: '',
+      errorCode: null,
+    });
     const size = { cols: Math.max(2, this.term.cols), rows: Math.max(1, this.term.rows) };
+    const target = this.target;
     try {
-      const { sessionId } = await this.api.connect(
-        this.target.kind === 'host'
-          ? {
-              hostId: this.target.hostId,
-              action: { type: 'shell', tmux: this.requestedTmux },
-              ...size,
-            }
-          : {
-              host: this.target.host,
-              port: this.target.port,
-              username: this.target.username,
-              auth: this.target.auth,
-              ...size,
-            },
-      );
+      const { sessionId } =
+        target.kind === 'local'
+          ? await this.api.openLocal({ shellId: target.shellId, folder: target.folder, ...size })
+          : await this.api.connect(
+              target.kind === 'host'
+                ? {
+                    hostId: target.hostId,
+                    action: { type: 'shell', tmux: this.requestedTmux },
+                    ...size,
+                  }
+                : {
+                    host: target.host,
+                    port: target.port,
+                    username: target.username,
+                    auth: target.auth,
+                    ...size,
+                  },
+            );
       if (this.disposed) {
         this.api.disconnect(sessionId);
         return;
@@ -758,7 +788,7 @@ export class TerminalSession {
     } catch (error) {
       this.update({
         state: 'denied',
-        statusText: 'Could not connect',
+        statusText: this.isLocal ? 'Could not start' : 'Could not connect',
         reason: friendlyInvokeError(error),
         errorCode: 'invalid_request',
       });
@@ -830,7 +860,7 @@ export class TerminalSession {
         this.lastSize = { cols: 0, rows: 0 };
         this.update({
           state: 'connected',
-          statusText: 'Connected',
+          statusText: this.isLocal ? 'Running' : 'Connected',
           reason: '',
           errorCode: null,
           attempt: 0,
@@ -956,6 +986,25 @@ export class TerminalSession {
     this.pendingAck = 0;
     const error = this.lastError;
     this.lastError = null;
+    if (this.isLocal) {
+      // A local shell is never reconnected: it ended, or could not start.
+      this.update({
+        state: error ? 'denied' : 'ended',
+        statusText: !error
+          ? 'Shell exited'
+          : error.code === 'connection_lost'
+            ? 'Stopped'
+            : 'Could not start',
+        reason:
+          error?.message ??
+          (exitCode === null
+            ? 'The shell was closed'
+            : `The shell exited${exitCode === 0 ? '' : ` with code ${exitCode}`}`),
+        errorCode: error?.code ?? null,
+        hostKey: null,
+      });
+      return;
+    }
     if (!error && exitCode !== null) {
       this.update({
         state: 'ended',
@@ -1001,11 +1050,31 @@ export class TerminalSession {
     this.reconnectTimer = setTimeout(() => this.reopen(), delay);
   }
 
-  /** Reconnects now with the credentials the engine still holds. */
+  /** Reconnects now with the credentials the engine still holds (a local shell starts anew). */
   reconnectNow(): void {
     clearTimeout(this.reconnectTimer);
     this.update({ attempt: 0 });
+    if (this.isLocal) {
+      this.restartLocal();
+      return;
+    }
     this.reopen();
+  }
+
+  /** "Start again" in a local tab whose shell ended: a new shell, same scrollback. */
+  private restartLocal() {
+    const state = this.snapshot.state;
+    if (this.disposed || (state !== 'ended' && state !== 'denied' && state !== 'disconnected')) {
+      return;
+    }
+    if (this.sessionId) this.api.disconnect(this.sessionId);
+    this.unlisten?.();
+    this.unlisten = null;
+    this.sessionId = null;
+    this.started = false;
+    this.lastSize = { cols: 0, rows: 0 };
+    this.term.write('\r\n');
+    void this.connect();
   }
 
   private reopen() {

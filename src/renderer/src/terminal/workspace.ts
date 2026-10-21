@@ -14,9 +14,11 @@ import type {
   ForwardInfo,
   ForwardSpec,
   HostInfo,
+  LocalShellInfo,
   Osc52Policy,
   QuqaApi,
   SavedForward,
+  ShellId,
   UiState,
 } from '../../../shared/ipc.js';
 import type { TmuxSessionInfo } from '../../../shared/protocol.js';
@@ -26,7 +28,7 @@ import { HostProbe, SessionEvents, TerminalSession, type Look, type Target } fro
 import { buildRows, sortRows, type DockRow, type OpenTerminal } from './dockModel.js';
 import { HostLink } from './link.js';
 import { Notices } from './notices.js';
-import { insideRoots, typedPaths } from './paths.js';
+import { insideRoots, localPaths, typedPaths } from './paths.js';
 import { clampZoom } from './themes.js';
 
 /** Where the file browser works: a terminal's own connection, or a `hold` link to a host. */
@@ -116,6 +118,10 @@ export class Workspace {
   readonly forwardsBySession = new Map<string, ForwardInfo[]>();
   /** The open file browser. */
   files: FilesView | null = null;
+  /** Shells for local terminals, as main detected them (ADR 0007). */
+  shells: LocalShellInfo[] = [];
+  /** The one a new local terminal starts. */
+  defaultShell: ShellId | null = null;
   readonly notices: Notices;
   /** Pinned plain shells (not saved: they do not survive a restart). */
   private readonly pinnedTags = new Set<string>();
@@ -182,6 +188,32 @@ export class Workspace {
     if (!this.restored) {
       this.restored = true;
       if (ui.restoreTabs) this.restoreLayout();
+    }
+    void this.loadShells();
+  }
+
+  /** The local shells main found (once per unlock; detection runs once per app run). */
+  async loadShells(): Promise<void> {
+    try {
+      const { shells, defaultShell } = await call('local.shells', {});
+      this.shells = shells;
+      this.defaultShell = defaultShell;
+      this.changed();
+    } catch {
+      // No local shells.
+    }
+  }
+
+  /** The default shell for new local terminals (settings.json, through main). */
+  async setDefaultShell(id: ShellId): Promise<void> {
+    try {
+      const settings = await call('app.setSettings', { localShell: id });
+      this.defaultShell = settings.localShell ?? id;
+      this.changed();
+    } catch (error) {
+      this.notices.notice('Could not save the default shell', 'error', {
+        detail: messageOf(error),
+      });
     }
   }
 
@@ -268,7 +300,8 @@ export class Workspace {
         onTmuxSessions: (s, available, sessions) => {
           if (s.hostId) this.setFound(s.hostId, available, sessions);
         },
-        onReady: () => {
+        onReady: (s) => {
+          if (s.isLocal) return;
           // The engine counted the connection: refresh "last used" and the counter.
           void call('hosts.list', {}).then(
             ({ hosts }) => this.setHosts(hosts),
@@ -325,11 +358,60 @@ export class Workspace {
     return session.tag;
   }
 
+  /**
+   * A local terminal (ADR 0007): the default shell (or `shellId`), in the home
+   * folder or one chosen in main's dialog; a new tab, or the second pane.
+   */
+  openLocal(
+    options: {
+      shellId?: ShellId;
+      folder?: { token: string; name: string } | null;
+      split?: 'h' | 'v';
+    } = {},
+  ): string | null {
+    const id = options.shellId ?? this.defaultShell ?? this.shells[0]?.id;
+    const shell = this.shells.find((s) => s.id === id);
+    if (!shell) {
+      this.notices.notice('No local shell was found on this computer', 'error');
+      return null;
+    }
+    const folder = options.folder ?? null;
+    const session = this.createTerminal(
+      {
+        kind: 'local',
+        shellId: shell.id,
+        title: shell.name,
+        folder: folder?.token ?? null,
+        folderName: folder?.name ?? null,
+      },
+      null,
+    );
+    this.place(session.tag, options.split);
+    return session.tag;
+  }
+
+  /** Asks main for a folder, then opens a local terminal there. */
+  async openLocalInFolder(shellId?: ShellId): Promise<void> {
+    try {
+      const { folder } = await call('local.chooseFolder', {});
+      if (folder) this.openLocal({ ...(shellId && { shellId }), folder });
+    } catch (error) {
+      this.notices.notice('Could not choose a folder', 'error', { detail: messageOf(error) });
+    }
+  }
+
   /** A new terminal with the same login as the active one (the + button). */
   duplicateActive(split?: 'h' | 'v'): void {
     const session = this.activeSession();
     if (!session) return;
-    if (session.target.kind === 'host')
+    if (session.target.kind === 'local') {
+      const { shellId, folder, folderName } = session.target;
+      this.openLocal({
+        shellId,
+        folder: folder && folderName !== null ? { token: folder, name: folderName } : null,
+        ...(split && { split }),
+      });
+    } else if (session.target.kind === 'host')
       this.openHost(session.target.hostId, { ...(split && { split }) });
     else if (!split) {
       const { host, port, username, auth } = session.target;
@@ -339,6 +421,12 @@ export class Workspace {
       const copy = this.createTerminal({ kind: 'adhoc', host, port, username, auth, title }, null);
       this.place(copy.tag, split);
     }
+  }
+
+  /** Ctrl+Shift+T: the same login as the active terminal, or a local terminal from Hosts. */
+  newTerminal(): void {
+    if (this.activeSession()) this.duplicateActive();
+    else this.openLocal();
   }
 
   private place(tag: string, split?: 'h' | 'v') {
@@ -508,12 +596,17 @@ export class Workspace {
     const tmux = session.getSnapshot().tmux ?? session.requestedTmux;
     const alias = (tmux && this.aliasOf(tmux)) || this.tagAliases.get(session.tag);
     if (alias) return alias;
+    if (session.target.kind === 'local') {
+      const { title, folderName } = session.target;
+      return session.getSnapshot().title || (folderName ? `${title} · ${folderName}` : title);
+    }
     return session.target.kind === 'host'
       ? (this.host(session.target.hostId)?.name ?? 'Host')
       : session.target.title;
   }
 
   hostNameOf(session: TerminalSession): string {
+    if (session.target.kind === 'local') return LOCAL_GROUP;
     return session.target.kind === 'host'
       ? (this.host(session.target.hostId)?.name ?? 'Host')
       : session.target.title;
@@ -832,6 +925,10 @@ export class Workspace {
   private async pasteUpload(session: TerminalSession) {
     const sessionId = session.id;
     if (!sessionId) return;
+    if (session.isLocal) {
+      await this.pasteLocal(session, sessionId);
+      return;
+    }
     const notice = this.notices.notice('Uploading from the clipboard', 'progress', {
       progress: null,
     });
@@ -859,11 +956,47 @@ export class Workspace {
     }
   }
 
+  /** A local terminal: main saves a pasted image in the profile's uploads folder; paths are typed. */
+  private async pasteLocal(session: TerminalSession, sessionId: string) {
+    try {
+      const { kind, paths } = await call('local.pasteClipboard', { sessionId });
+      if (kind === 'none' || paths.length === 0) {
+        this.notices.notice('Nothing to paste', 'info');
+        return;
+      }
+      session.typePaste(localPaths(paths, isWindows()));
+      if (kind === 'image') {
+        this.notices.notice('Image saved — path pasted', 'success', { detail: paths.join('  ') });
+      }
+    } catch (error) {
+      this.notices.notice('Paste from the clipboard failed', 'error', {
+        detail: messageOf(error),
+      });
+    }
+  }
+
   /** Files dropped on a terminal: to its program's folder (inside the roots), else the upload folder. */
   async uploadDropped(session: TerminalSession, files: File[]): Promise<void> {
     const sessionId = session.id;
     if (!sessionId || session.getSnapshot().state !== 'connected') {
       this.notices.notice('The terminal is not connected', 'error');
+      return;
+    }
+    if (session.isLocal) {
+      // A local terminal gets the dropped files' paths typed (nothing is copied).
+      const grants = await this.api.grantFiles(files).catch(() => []);
+      if (grants.length === 0) {
+        this.notices.notice('Only files can be dropped (no folders)', 'error');
+        return;
+      }
+      try {
+        const { paths } = await call('local.droppedPaths', { grants: grants.map((g) => g.token) });
+        session.typePaste(localPaths(paths, isWindows()));
+      } catch (error) {
+        this.notices.notice('Could not use the dropped files', 'error', {
+          detail: messageOf(error),
+        });
+      }
       return;
     }
     const grants = await this.api.grantFiles(files).catch(() => []);
@@ -1057,6 +1190,13 @@ export class Workspace {
     this.saveTimer = undefined;
     void call('ui.save', this.ui).catch(() => undefined);
   }
+}
+
+/** The dock and switcher group local terminals under this name. */
+export const LOCAL_GROUP = 'This computer';
+
+function isWindows(): boolean {
+  return navigator.userAgent.includes('Windows');
 }
 
 // eslint-disable-next-line no-control-regex

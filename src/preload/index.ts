@@ -8,6 +8,7 @@ import type { QuqaApi, SessionEvent, VaultState } from '../shared/ipc.js';
 
 const api: QuqaApi = {
   connect: (request) => ipcRenderer.invoke(Channel.connect, request),
+  openLocal: (request) => ipcRenderer.invoke(Channel.openLocal, request),
   input: (message) => ipcRenderer.send(Channel.input, message),
   resize: (message) => ipcRenderer.send(Channel.resize, message),
   ack: (message) => ipcRenderer.send(Channel.ack, message),

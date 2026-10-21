@@ -28,6 +28,7 @@ import {
 } from '../shared/ipc.js';
 import type { EngineHost } from './engine-host.js';
 import type { Grants } from './grants.js';
+import type { LocalTerminals } from './local-terminals.js';
 import type { Updater } from './updater.js';
 
 type Result = CallResult<unknown>;
@@ -52,6 +53,8 @@ export interface BrokerDeps {
   appSettings(): AppSettings;
   setAppSettings(change: CallParams<'app.setSettings'>): AppSettings;
   updater: Updater;
+  /** Local terminals: shells, folders, image paste (ADR 0007). */
+  local: LocalTerminals;
 }
 
 const usesOs = (mode: VaultMode) => mode !== 'password';
@@ -362,6 +365,11 @@ export class VaultBroker {
         return engine.call('agent.list', raw as CallParams<'agent.list'>);
       case 'keys.install':
         return engine.call('keys.install', raw as CallParams<'keys.install'>);
+      case 'local.shells':
+      case 'local.chooseFolder':
+      case 'local.pasteClipboard':
+      case 'local.droppedPaths':
+        return this.deps.local.handle(method, raw);
     }
   }
 
@@ -501,13 +509,13 @@ const MAX_PASTED_IMAGE_BYTES = 64 * 1024 * 1024;
 /** Windows Explorer's list of copied files (UTF-16, NUL-separated). */
 const FILE_NAME_W = 'electron application/osclipboard;format="FileNameW"';
 
-type ClipboardUpload =
+export type ClipboardUpload =
   | { kind: 'image'; bytes: Buffer; ext: string }
   | { kind: 'files'; paths: string[] }
   | { kind: 'none' };
 
 /** An image on the clipboard, or files copied in the system file manager. */
-async function readClipboardUpload(): Promise<ClipboardUpload> {
+export async function readClipboardUpload(): Promise<ClipboardUpload> {
   let items: Awaited<ReturnType<typeof clipboard.read>>;
   try {
     items = await clipboard.read();

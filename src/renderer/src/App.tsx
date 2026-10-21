@@ -130,6 +130,8 @@ export function App() {
       renderer: () => workspace.activeSession()?.getSnapshot().renderer ?? 'none',
       tmux: () => workspace.activeSession()?.getSnapshot().tmux ?? null,
       tabs: () => workspace.tabs.length,
+      local: () => workspace.activeSession()?.isLocal ?? false,
+      title: () => workspace.activeSession()?.getSnapshot().title ?? '',
       panes: () => workspace.currentTab()?.panes.length ?? 0,
       useDomRenderer: () => workspace.activeSession()?.useDomRenderer(),
     };
@@ -211,7 +213,10 @@ export function App() {
         workspace.showHome();
       } else if (letter('t')) {
         handled();
-        workspace.duplicateActive();
+        workspace.newTerminal();
+      } else if (event.code === 'Backquote' || event.key === '~' || event.key === '`') {
+        handled();
+        workspace.openLocal();
       } else if (letter('d') || letter('e')) {
         handled();
         const split = letter('d') ? 'h' : 'v';

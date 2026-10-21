@@ -15,13 +15,14 @@ describe('app settings', () => {
       theme: 'glass',
       autoUpdate: true,
       skippedVersion: null,
+      localShell: null,
     });
   });
 
   it('keeps good fields of a partly bad file and drops unknown ones', () => {
     expect(
       parseSettings('{"theme":"classic","autoUpdate":"yes","extra":1,"skippedVersion":"0.2.0"}'),
-    ).toEqual({ theme: 'classic', autoUpdate: true, skippedVersion: '0.2.0' });
+    ).toEqual({ theme: 'classic', autoUpdate: true, skippedVersion: '0.2.0', localShell: null });
     expect(parseSettings('{"theme":"neon"}')).toEqual(DEFAULT_SETTINGS);
     expect(parseSettings('[1]')).toEqual(DEFAULT_SETTINGS);
   });
@@ -37,6 +38,11 @@ describe('app settings', () => {
     // Invalid changes are refused.
     file.update({ theme: 'neon' as never });
     expect(JSON.parse(readFileSync(path, 'utf8')).theme).toBe('classic');
+    // The default local shell: a shell id or null, nothing else.
+    file.update({ localShell: 'pwsh' });
+    expect(new SettingsFile(path).get().localShell).toBe('pwsh');
+    file.update({ localShell: 'C:\\evil.exe' as never });
+    expect(new SettingsFile(path).get().localShell).toBe('pwsh');
     writeFileSync(path, 'not json');
     expect(new SettingsFile(path).get()).toEqual(DEFAULT_SETTINGS);
   });

@@ -4,7 +4,8 @@
  * attach): the window opens, the vault is created (with the OS key store
  * when there is one, which is DPAPI on Windows) and the app goes straight to
  * the hosts screen, a host with a Georgian name renders in the bundled
- * Georgian font (screenshot in ui-screenshots/), About shows the version and
+ * Georgian font (screenshot in ui-screenshots/), a local terminal runs the
+ * default shell (PowerShell on Windows) with Georgian output, About shows the version and
  * the update setting, after a restart the vault opens again and the window
  * comes back where it was, and "Start over" moves the vault aside.
  *
@@ -127,6 +128,56 @@ test('Georgian text renders in the bundled Georgian fonts', async () => {
     .getByRole('button', { name: 'Delete' })
     .click();
   await expect(page.getByText('No hosts yet.')).toBeVisible();
+});
+
+test('a local terminal runs the default shell, in UTF-8, and starts again after exit', async () => {
+  const windows = process.platform === 'win32';
+  const hooks = () =>
+    page.evaluate(() => ({
+      state: window.__quqaTest?.state() ?? 'none',
+      local: window.__quqaTest?.local() ?? false,
+      text: window.__quqaTest?.text() ?? '',
+    }));
+  // The shell menu lists what main detected; the default is marked.
+  await page.getByRole('button', { name: 'Local shells' }).click();
+  const menu = page.getByRole('menu', { name: 'Local shells' });
+  await expect(menu).toContainText(windows ? 'PowerShell' : 'sh');
+  await expect(menu).toContainText('default');
+  mkdirSync('ui-screenshots', { recursive: true });
+  await page.screenshot({ path: join('ui-screenshots', 'smoke-local-menu.png') });
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+
+  await page.getByRole('button', { name: 'New local terminal' }).click();
+  await expect(page.getByTestId('terminal-tab')).toBeVisible();
+  await expect.poll(async () => (await hooks()).state, { timeout: 30_000 }).toBe('connected');
+  expect((await hooks()).local).toBe(true);
+  await expect(page.getByTestId('terminal-tab').getByText('local', { exact: true })).toBeVisible();
+  if (windows) {
+    await expect.poll(async () => (await hooks()).text, { timeout: 30_000 }).toMatch(/PS .*>/);
+  }
+  // The joined word appears only in the output, not in the typed command.
+  await page.keyboard.type(
+    windows ? "Write-Output ('გამ' + 'არჯობა')" : "printf '%s%s\\n' 'გამ' 'არჯობა'",
+  );
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await hooks()).text, { timeout: 15_000 }).toContain('გამარჯობა');
+  mkdirSync('ui-screenshots', { recursive: true });
+  await page.screenshot({ path: join('ui-screenshots', 'smoke-local-terminal.png') });
+
+  await page.keyboard.type('exit 3');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await hooks()).state, { timeout: 15_000 }).toBe('ended');
+  await expect(page.getByTestId('terminal-pane')).toContainText('exited with code 3');
+  await page.getByTestId('terminal-pane').getByRole('button', { name: 'Start again' }).click();
+  await expect.poll(async () => (await hooks()).state, { timeout: 30_000 }).toBe('connected');
+
+  await page
+    .getByTestId('terminal-tab')
+    .getByRole('button', { name: 'Close (ends the shell and its programs)' })
+    .click();
+  await expect(page.getByTestId('terminal-tab')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Hosts' })).toBeVisible();
 });
 
 test('About shows the version, licence and source', async () => {

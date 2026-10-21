@@ -10,6 +10,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/engine/**/*",
+    "src/pty/**/*",
     "src/shared/**/*",
     "test/e2e/**/*",
     "electron.vite.config.ts",

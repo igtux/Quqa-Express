@@ -38,6 +38,7 @@ const snapshot = (change: Partial<ConnSnapshot> = {}): ConnSnapshot => ({
   history: false,
   historyMode: false,
   notice: null,
+  title: '',
   ...change,
 });
 

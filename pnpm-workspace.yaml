@@ -8,6 +8,9 @@ allowBuilds:
   cpu-features: false
   # Squirrel.Windows installer helper; we build NSIS and portable targets only.
   electron-winstaller: false
+  # Local terminals (ADR 0007): prebuilt N-API binaries for Windows, Linux and
+  # macOS ship in the package, so its node-gyp fallback never runs.
+  node-pty: false
 
 # electron-builder packages a flat node_modules.
 nodeLinker: hoisted

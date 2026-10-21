@@ -24,6 +24,10 @@ import { HostKeyDialog } from './HostKeyDialog.js';
 import { Icon, type IconName } from './icons.js';
 import { PasteDialog } from './PasteDialog.js';
 
+/** Local tabs have no tmux and are not reopened (the header badge says so). */
+export const LOCAL_TOOLTIP =
+  'Runs on this computer as you. No tmux: closing the tab ends the shell and its programs, and local tabs are not reopened after a restart.';
+
 export const STATUS_CLASS: Record<ConnState, string> = {
   connecting: 'connecting',
   'host-key': 'connecting',
@@ -157,6 +161,7 @@ function Header({
     snapshot.state === 'disconnected' || snapshot.state === 'denied' || snapshot.state === 'ended';
   const favorite = workspace.activeIsFavorite();
   const split = tab.panes.length === 2;
+  const local = session.isLocal;
 
   return (
     <div className="terminal-header">
@@ -183,6 +188,11 @@ function Header({
             tmux
           </span>
         )}
+        {local && (
+          <span className="terminal-badge local" title={LOCAL_TOOLTIP}>
+            local
+          </span>
+        )}
         {snapshot.busy && <span className="terminal-badge busy">working…</span>}
         {snapshot.pendingInput > 0 && (
           <button
@@ -198,8 +208,8 @@ function Header({
         {(idle || snapshot.state === 'reconnecting') && (
           <HeaderButton
             icon="refresh"
-            label="Reconnect"
-            text="Reconnect"
+            label={local ? 'Start the shell again' : 'Reconnect'}
+            text={local ? 'Start again' : 'Reconnect'}
             onClick={() => session.reconnectNow()}
           />
         )}
@@ -238,11 +248,13 @@ function Header({
             onClick={() => session.setHistoryMode(!snapshot.historyMode)}
           />
         )}
-        <HeaderButton
-          icon="folder"
-          label="Files on this host (SFTP)"
-          onClick={() => workspace.openFilesForTerminal(session.tag)}
-        />
+        {!local && (
+          <HeaderButton
+            icon="folder"
+            label="Files on this host (SFTP)"
+            onClick={() => workspace.openFilesForTerminal(session.tag)}
+          />
+        )}
         <HeaderButton
           icon="clipboard"
           label="Paste: text, an image or copied files (Ctrl+V, right click)"
@@ -252,12 +264,14 @@ function Header({
             void session.pasteFromClipboard();
           }}
         />
-        <HeaderButton
-          icon="tunnel"
-          label="Port forwarding over this connection"
-          className="optional-1"
-          onClick={() => setForwarding(true)}
-        />
+        {!local && (
+          <HeaderButton
+            icon="tunnel"
+            label="Port forwarding over this connection"
+            className="optional-1"
+            onClick={() => setForwarding(true)}
+          />
+        )}
         <HeaderButton
           icon="search"
           label="Search the scrollback (Ctrl+Shift+F)"
@@ -280,7 +294,11 @@ function Header({
         />
         <HeaderButton
           icon="plus"
-          label="New terminal to the same host (Ctrl+Shift+T)"
+          label={
+            local
+              ? `New ${session.target.title} terminal (Ctrl+Shift+T)`
+              : 'New terminal to the same host (Ctrl+Shift+T)'
+          }
           onClick={() => workspace.duplicateActive()}
         />
         <HeaderButton
@@ -305,9 +323,17 @@ function Header({
         />
         <HeaderButton
           icon="close"
-          label={split ? 'Close the tab (both panes)' : idle ? 'Close' : 'Disconnect and close'}
+          label={
+            split
+              ? 'Close the tab (both panes)'
+              : idle
+                ? 'Close'
+                : local
+                  ? 'Close (ends the shell and its programs)'
+                  : 'Disconnect and close'
+          }
           danger
-          text={idle ? 'Close' : 'Disconnect'}
+          text={idle || local ? 'Close' : 'Disconnect'}
           onClick={() => workspace.closeTab(tab.id)}
         />
       </div>
@@ -440,7 +466,9 @@ function Pane({
           <div className="terminal-drop-overlay" data-testid="drop-overlay">
             <Icon name="upload" />
             <span>
-              Drop to upload to {workspace.folderOf(session) ?? 'the host’s upload folder'}
+              {session.isLocal
+                ? 'Drop to type the files’ paths'
+                : `Drop to upload to ${workspace.folderOf(session) ?? 'the host’s upload folder'}`}
             </span>
           </div>
         )}
@@ -460,7 +488,7 @@ function Pane({
               className="system-btn small"
               onClick={() => session.reconnectNow()}
             >
-              {snapshot.state === 'ended' ? 'Start again' : 'Reconnect'}
+              {snapshot.state === 'ended' || session.isLocal ? 'Start again' : 'Reconnect'}
             </button>
           </div>
         )}

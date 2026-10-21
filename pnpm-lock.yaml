@@ -172,6 +172,9 @@ importers:
       '@noble/hashes':
         specifier: ^2.4.0
         version: 2.4.0
+      node-pty:
+        specifier: 1.2.0-beta.15
+        version: 1.2.0-beta.15
       ssh2:
         specifier: ^1.17.0
         version: 1.17.0
@@ -1689,6 +1692,9 @@ packages:
     resolution: {integrity: sha512-suSdznUPfabdaeLiNERA0LHod14RhcEn8wMPUZEQ6bKvajUCZ+aizY4pIvlLU+gImeLKp2bFDHhOc9yonISsXw==}
     engines: {node: '>=22.12.0'}
 
+  node-addon-api@7.1.1:
+    resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
+
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
 
@@ -1699,6 +1705,9 @@ packages:
 
   node-int64@0.4.0:
     resolution: {integrity: sha512-O5lz91xSOeoXP6DulyHfllpq+Eg00MWitZIbtPfoSEvqIHdl5gfcY6hYzDWnj0qD5tz52PI08u9qUvSVeUBeHw==}
+
+  node-pty@1.2.0-beta.15:
+    resolution: {integrity: sha512-vORSzHXi4Ofl7HemVWpuudLqCPdaQb4LfpRCUpE5HPxhp4JYscl8zZwxh11p26v2wvW24WMwnMfLjhRLixrfxA==}
 
   node-releases@2.0.59:
     resolution: {integrity: sha512-5qr2okC4ItAI0hG5SaV0HoYMpnM/Y6+Oqr7AmPYy/2uEoGvS+GbSKLeRxSS1uAdu59yz0ouzcuXievSgg///WA==}
@@ -3806,6 +3815,8 @@ snapshots:
     dependencies:
       semver: 7.7.4
 
+  node-addon-api@7.1.1: {}
+
   node-api-version@0.2.1:
     dependencies:
       semver: 7.7.4
@@ -3824,6 +3835,10 @@ snapshots:
       which: 6.0.1
 
   node-int64@0.4.0: {}
+
+  node-pty@1.2.0-beta.15:
+    dependencies:
+      node-addon-api: 7.1.1
 
   node-releases@2.0.59: {}
 

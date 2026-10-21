@@ -33,6 +33,7 @@ import {
   ConnectRequest,
   HostKeyAnswer,
   InputMessage,
+  LocalOpenRequest,
   MAX_CLIPBOARD_LENGTH,
   NotifyMessage,
   PromptAnswer,
@@ -48,6 +49,8 @@ import { SettingsFile } from './app-settings.js';
 import { EngineHost } from './engine-host.js';
 import { UserGesture } from './gesture.js';
 import { Grants } from './grants.js';
+import { LocalTerminals } from './local-terminals.js';
+import { PtyHost } from './pty-host.js';
 import { hardenSessions } from './security.js';
 import {
   APP_ENTRY,
@@ -149,8 +152,8 @@ function start() {
   const gesture = new UserGesture();
   const settings = new SettingsFile(join(app.getPath('userData'), 'settings.json'));
   const appSettings = (): AppSettings => {
-    const { theme, autoUpdate } = settings.get();
-    return { theme, autoUpdate, material: usesMaterial(theme) };
+    const { theme, autoUpdate, localShell } = settings.get();
+    return { theme, autoUpdate, material: usesMaterial(theme), localShell };
   };
   const updater = new Updater({
     settings,
@@ -217,6 +220,22 @@ function start() {
     },
   });
 
+  /** Session events go to the window that opened the session. */
+  const deliver = (event: SessionEvent) => {
+    const owner = owners.get(event.sessionId);
+    const target = BrowserWindow.getAllWindows().find((w) => w.webContents.id === owner);
+    target?.webContents.send(Channel.event, event);
+  };
+  // Local terminals run in their own process, started on first use (ADR 0007).
+  const pty = new PtyHost(join(here, 'pty.js'), deliver);
+  const local = new LocalTerminals({
+    pty,
+    window: () => window,
+    grants,
+    uploadsDir: join(app.getPath('userData'), 'uploads'),
+    defaultShell: () => settings.get().localShell,
+  });
+
   /** True if the message comes from our window's top frame showing our page. */
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent): boolean => {
     const frame = event.senderFrame;
@@ -253,6 +272,20 @@ function start() {
     return { sessionId };
   });
 
+  // A local shell starts only from this intent, naming a shell main detected,
+  // and only right after a key press or click in the window.
+  ipcMain.handle(Channel.openLocal, async (event, request: unknown) => {
+    if (!trusted(event) || !gesture.recent()) throw new Error('Open it with a key or a click');
+    if (!Value.Check(LocalOpenRequest, request)) throw new Error('Invalid request');
+    const sessionId = `s${++nextSession}`;
+    owners.set(sessionId, event.sender.id);
+    if (!(await local.open(sessionId, request))) {
+      owners.delete(sessionId);
+      throw new Error('That shell is not available on this computer');
+    }
+    return { sessionId };
+  });
+
   ipcMain.handle(Channel.call, async (event, method: unknown, params: unknown) => {
     if (!trusted(event) || !broker) throw new Error('Not allowed');
     if (typeof method !== 'string' || !Object.hasOwn(AppCalls, method)) {
@@ -263,7 +296,7 @@ function start() {
       return { ok: false, code: 'invalid_request', message: 'Invalid request' };
     }
     // Main reads the clipboard for an image paste only right after a key press or click.
-    if (name === 'files.pasteClipboard' && !gesture.recent()) {
+    if ((name === 'files.pasteClipboard' || name === 'local.pasteClipboard') && !gesture.recent()) {
       return { ok: false, code: 'invalid_request', message: 'Paste with a key or a click' };
     }
     // Calls about a session (files, transfers, forwards) only for the window that opened it.
@@ -280,23 +313,40 @@ function start() {
     return grants.grant(paths);
   });
 
+  // Input, size and flow control of a local terminal go to the PTY process, the rest to the engine.
   on(Channel.input, InputMessage, (event, message) => {
-    if (owns(event, message.sessionId)) engine.send({ type: 'input', ...message });
+    if (!owns(event, message.sessionId)) return;
+    if (local.isLocal(message.sessionId)) pty.send({ type: 'input', ...message });
+    else engine.send({ type: 'input', ...message });
   });
   on(Channel.resize, ResizeMessage, (event, message) => {
-    if (owns(event, message.sessionId)) engine.send({ type: 'resize', ...message });
+    if (!owns(event, message.sessionId)) return;
+    if (local.isLocal(message.sessionId)) pty.send({ type: 'resize', ...message });
+    else engine.send({ type: 'resize', ...message });
   });
   on(Channel.ack, AckMessage, (event, message) => {
-    if (owns(event, message.sessionId)) engine.send({ type: 'ack', ...message });
+    if (!owns(event, message.sessionId)) return;
+    if (local.isLocal(message.sessionId)) pty.send({ type: 'ack', ...message });
+    else engine.send({ type: 'ack', ...message });
   });
-  on(Channel.disconnect, SessionMessage, (event, { sessionId }) => {
-    if (!owns(event, sessionId)) return;
+  /** Ends a session of a window: a local shell, or an SSH session in the engine. */
+  const endSession = (sessionId: string) => {
     owners.delete(sessionId);
+    if (local.isLocal(sessionId)) {
+      local.close(sessionId);
+      return;
+    }
     for (const [requestId, owner] of prompts) if (owner === sessionId) prompts.delete(requestId);
     engine.send({ type: 'disconnect', sessionId });
+  };
+  on(Channel.disconnect, SessionMessage, (event, { sessionId }) => {
+    if (owns(event, sessionId)) endSession(sessionId);
   });
+  // A local terminal is never "reconnected": the renderer opens a new shell instead.
   on(Channel.reconnect, SessionMessage, (event, { sessionId }) => {
-    if (owns(event, sessionId)) engine.send({ type: 'reconnect', sessionId });
+    if (owns(event, sessionId) && !local.isLocal(sessionId)) {
+      engine.send({ type: 'reconnect', sessionId });
+    }
   });
   on(Channel.hostKeyAnswer, HostKeyAnswer, (event, answer) => {
     const sessionId = prompts.get(answer.requestId);
@@ -314,7 +364,9 @@ function start() {
     if (trusted(event) && window && !window.isFocused()) window.flashFrame(true);
   });
   on(Channel.tmux, TmuxMessage, (event, message) => {
-    if (owns(event, message.sessionId)) engine.send({ type: 'tmux', message });
+    if (owns(event, message.sessionId) && !local.isLocal(message.sessionId)) {
+      engine.send({ type: 'tmux', message });
+    }
   });
   on(Channel.fullScreen, Type.Null(), () => {
     window?.setFullScreen(!window.isFullScreen());
@@ -432,11 +484,8 @@ function start() {
     });
     window.on('focus', () => window?.flashFrame(false));
     window.on('closed', () => {
-      for (const [sessionId, owner] of owners) {
-        if (owner === closedId) {
-          owners.delete(sessionId);
-          engine.send({ type: 'disconnect', sessionId });
-        }
+      for (const [sessionId, owner] of [...owners]) {
+        if (owner === closedId) endSession(sessionId);
       }
       window = null;
     });
@@ -478,6 +527,7 @@ function start() {
           return appSettings();
         },
         updater,
+        local,
       });
       updater.start();
       broker.watchIdle();
@@ -499,5 +549,6 @@ function start() {
   app.on('before-quit', () => {
     updater.stop();
     engine.stop();
+    pty.stop();
   });
 }

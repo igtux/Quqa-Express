@@ -1,7 +1,7 @@
 {
   "name": "quqa-express",
   "productName": "quqa-express",
-  "version": "0.1.0-beta.8",
+  "version": "0.1.0-beta.9",
   "description": "Offline, single-user SSH terminal for the desktop.",
   "license": "Apache-2.0",
   "author": "AURA and the quqa-express contributors",
@@ -37,6 +37,7 @@
   "dependencies": {
     "@noble/ciphers": "^2.4.0",
     "@noble/hashes": "^2.4.0",
+    "node-pty": "1.2.0-beta.15",
     "ssh2": "^1.17.0",
     "typebox": "^1.4.2"
   },

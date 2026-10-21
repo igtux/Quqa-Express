@@ -27,12 +27,15 @@ Free and open source under the Apache-2.0 licence.
   warnings, OSC 52 writes only after you allow them.
 - Bell and "agent finished" notifications for long-running programs such as
   Claude Code.
+- Local terminals: PowerShell 7, Windows PowerShell, Command Prompt or WSL
+  in a tab (Ctrl+Shift+\`), with the same look, paste, splits and
+  notifications, for running agents such as Claude Code or Codex locally.
 
 Full list: [docs/FEATURES.md](docs/FEATURES.md). Plan:
 [docs/BACKLOG.md](docs/BACKLOG.md). Design and security:
 [docs/adr/0001-stack-and-security.md](docs/adr/0001-stack-and-security.md).
 
-Built with Electron, React, xterm.js and the `ssh2` library. Private keys
+Built with Electron, React, xterm.js, the `ssh2` library and `node-pty`. Private keys
 stay in a separate engine process and never reach the UI. It ports the
 terminal side of Jarvis NG, AURA's web platform.
 
