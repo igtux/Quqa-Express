@@ -206,3 +206,12 @@ engine (utilityProcess: ssh2, vault, keys, SFTP, tmux commands)
 - Unsigned releases mean a SmartScreen warning on Windows until (if ever)
   free signing becomes available; checksums and provenance are the trust
   path.
+
+## Addendum (2026-10-21, Phase 2)
+
+The vault format and crypto choices are fixed in
+[ADR 0002](0002-vault.md): XChaCha20-Poly1305 and Argon2id from the pure-JS
+@noble libraries (not libsodium, not Node `crypto`); the engine reads and
+writes the vault file itself and main only wraps a random OS key with
+`safeStorage`; passwords and passphrases are asked engine-side through
+prompt events; the renderer is served from `app://quqa/`.

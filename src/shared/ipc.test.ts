@@ -1,14 +1,16 @@
 import Value from 'typebox/value';
 import { describe, expect, it } from 'vitest';
-import { EngineCommand } from './engine-protocol.js';
+import { EngineCalls, EngineCommand } from './engine-protocol.js';
 import {
   AckMessage,
+  AppCalls,
   ClipboardText,
   ConnectRequest,
   HostKeyAnswer,
   InputMessage,
   MAX_INPUT_LENGTH,
   MAX_PRIVATE_KEY_LENGTH,
+  PromptAnswer,
   ResizeMessage,
   SessionMessage,
 } from './ipc.js';
@@ -17,23 +19,29 @@ const connect = {
   host: 'server.example.com',
   port: 22,
   username: 'deploy',
-  auth: { kind: 'password', password: 'secret' },
+  auth: { kind: 'password' },
   cols: 80,
   rows: 24,
 };
 
 describe('ConnectRequest', () => {
-  it('accepts password and key logins', () => {
+  it('accepts password logins and stored keys by id, never secrets', () => {
     expect(Value.Check(ConnectRequest, connect)).toBe(true);
     expect(
       Value.Check(ConnectRequest, {
         ...connect,
-        auth: { kind: 'key', privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----', passphrase: 'pw' },
+        auth: { kind: 'key', keyId: 'key_0123456789abcdef' },
       }),
     ).toBe(true);
-    expect(
-      Value.Check(ConnectRequest, { ...connect, auth: { kind: 'key', privateKey: 'k' } }),
-    ).toBe(true);
+    for (const auth of [
+      { kind: 'password', password: 'secret' },
+      { kind: 'key', privateKey: '-----BEGIN OPENSSH PRIVATE KEY-----' },
+      { kind: 'key', keyId: 'key_0123456789abcdef', passphrase: 'pw' },
+      { kind: 'key', keyId: '../key' },
+      { kind: 'key', keyId: 'key_0123456789ABCDEF' },
+    ]) {
+      expect(Value.Check(ConnectRequest, { ...connect, auth })).toBe(false);
+    }
   });
 
   it.each(['10.0.0.1', '::1', '[fe80::1]', 'host-1.lan', 'localhost', 'a.b.c.'])(
@@ -70,21 +78,7 @@ describe('ConnectRequest', () => {
     expect(Value.Check(ConnectRequest, { ...connect, rows: 501 })).toBe(false);
     expect(Value.Check(ConnectRequest, { ...connect, extra: true })).toBe(false);
     expect(Value.Check(ConnectRequest, { ...connect, auth: { kind: 'agent' } })).toBe(false);
-    expect(
-      Value.Check(ConnectRequest, {
-        ...connect,
-        auth: { kind: 'password', password: 'x', privateKey: 'y' },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(ConnectRequest, { ...connect, auth: { kind: 'password', password: '' } }),
-    ).toBe(false);
-    expect(
-      Value.Check(ConnectRequest, {
-        ...connect,
-        auth: { kind: 'key', privateKey: 'k'.repeat(MAX_PRIVATE_KEY_LENGTH + 1) },
-      }),
-    ).toBe(false);
+    expect(Value.Check(ConnectRequest, { ...connect, auth: { kind: 'key' } })).toBe(false);
     expect(Value.Check(ConnectRequest, null)).toBe(false);
     expect(Value.Check(ConnectRequest, 'connect')).toBe(false);
   });
@@ -124,6 +118,99 @@ describe('session messages', () => {
     expect(Value.Check(ClipboardText, 'hello')).toBe(true);
     expect(Value.Check(ClipboardText, 42)).toBe(false);
   });
+
+  it('checks prompt answers', () => {
+    expect(Value.Check(PromptAnswer, { requestId: 'p1', answers: ['pw'], remember: false })).toBe(
+      true,
+    );
+    expect(Value.Check(PromptAnswer, { requestId: 'p1', answers: null, remember: false })).toBe(
+      true,
+    );
+    expect(Value.Check(PromptAnswer, { requestId: 'k1', answers: [], remember: false })).toBe(
+      false,
+    );
+    expect(Value.Check(PromptAnswer, { requestId: 'p1', answers: ['x'] })).toBe(false);
+    expect(
+      Value.Check(PromptAnswer, {
+        requestId: 'p1',
+        answers: Array.from({ length: 11 }, () => 'a'),
+        remember: false,
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(PromptAnswer, { requestId: 'p1', answers: ['x'.repeat(1025)], remember: false }),
+    ).toBe(false);
+  });
+});
+
+describe('AppCalls', () => {
+  const check = (method: keyof typeof AppCalls, params: unknown) =>
+    Value.Check(AppCalls[method].params, params);
+
+  it('accepts well-formed parameters', () => {
+    expect(check('vault.status', {})).toBe(true);
+    expect(check('vault.create', {})).toBe(true);
+    expect(check('vault.create', { password: 'long enough', portable: true })).toBe(true);
+    expect(check('keys.generate', { label: 'laptop 2026' })).toBe(true);
+    expect(
+      check('keys.import', { label: 'k', privateKey: '-----BEGIN', savePassphrase: false }),
+    ).toBe(true);
+    expect(check('hostKeys.forget', { host: 'server', port: 22 })).toBe(true);
+    expect(check('hostKeys.replace', { requestId: 'c12' })).toBe(true);
+    expect(check('vault.updateSettings', { autoLockMinutes: 15, lockOnSleep: true })).toBe(true);
+  });
+
+  it('rejects hostile parameters', () => {
+    expect(check('vault.status', { extra: 1 })).toBe(false);
+    expect(check('vault.create', { password: '' })).toBe(false);
+    expect(check('keys.generate', { label: '' })).toBe(false);
+    expect(check('keys.generate', { label: 'two\nlines' })).toBe(false);
+    expect(check('keys.generate', { label: 'tab\there' })).toBe(false);
+    expect(check('keys.generate', { label: 'x'.repeat(65) })).toBe(false);
+    expect(
+      check('keys.import', {
+        label: 'k',
+        privateKey: 'k'.repeat(MAX_PRIVATE_KEY_LENGTH + 1),
+        savePassphrase: false,
+      }),
+    ).toBe(false);
+    // The renderer never names a file path; main asks with its own dialog.
+    expect(
+      check('keys.importFile', { label: 'k', savePassphrase: false, path: '/etc/shadow' }),
+    ).toBe(false);
+    expect(check('hostKeys.importKnownHosts', { chooseFile: false, path: '/x' })).toBe(false);
+    expect(check('keys.delete', { id: '../../vault' })).toBe(false);
+    expect(check('hostKeys.forget', { host: 'a b', port: 22 })).toBe(false);
+    expect(check('hostKeys.replace', { requestId: 'k1' })).toBe(false);
+    expect(check('vault.updateSettings', { autoLockMinutes: -1, lockOnSleep: true })).toBe(false);
+  });
+
+  it('never returns a field that could hold a secret', () => {
+    const secretish = /private|passphrase|password|secret|osKey|dataKey|^key$/i;
+    const offenders: string[] = [];
+    const walk = (schema: unknown, path: string) => {
+      if (typeof schema !== 'object' || schema === null) return;
+      const node = schema as Record<string, unknown>;
+      const properties = node['properties'] as Record<string, unknown> | undefined;
+      for (const [name, child] of Object.entries(properties ?? {})) {
+        const flag = (child as { type?: unknown }).type === 'boolean';
+        if (secretish.test(name) && !flag) offenders.push(`${path}.${name}`);
+        walk(child, `${path}.${name}`);
+      }
+      for (const key of ['anyOf', 'oneOf', 'allOf']) {
+        for (const child of (node[key] as unknown[] | undefined) ?? []) walk(child, path);
+      }
+      walk(node['items'], `${path}[]`);
+      if (typeof node['additionalProperties'] === 'object') {
+        walk(node['additionalProperties'], `${path}{}`);
+      }
+      if (properties && node['additionalProperties'] !== false) offenders.push(`${path} (open)`);
+    };
+    for (const [method, { result }] of Object.entries(AppCalls)) walk(result, method);
+    for (const [method, { result }] of Object.entries(EngineCalls))
+      walk(result, `engine:${method}`);
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe('EngineCommand', () => {
@@ -136,6 +223,8 @@ describe('EngineCommand', () => {
       { type: 'disconnect', sessionId: 's1' },
       { type: 'reconnect', sessionId: 's1' },
       { type: 'host-key-answer', requestId: 'k3', accept: false },
+      { type: 'prompt-answer', requestId: 'p3', answers: ['pw'], remember: true },
+      { type: 'call', callId: 1, method: 'keys.list', params: {} },
       { type: 'shutdown' },
     ];
     for (const command of commands) expect(Value.Check(EngineCommand, command)).toBe(true);

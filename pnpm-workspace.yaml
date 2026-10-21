@@ -11,3 +11,11 @@ allowBuilds:
 
 # electron-builder packages a flat node_modules.
 nodeLinker: hoisted
+
+# pnpm audit: accepted findings, each with a reason (docs/adr/0002-vault.md, "Audit").
+auditConfig:
+  ignoreGhsas:
+    # sprintf-js <=1.1.3 DoS through unbounded precision (no patched release).
+    # Reached only through electron-builder > @electron/get > global-agent >
+    # roarr, a build-time tool that formats its own log strings; never shipped.
+    - GHSA-hp3w-g68c-fv3c

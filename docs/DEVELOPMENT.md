@@ -50,7 +50,14 @@ The test server accepts the user `quqa` with the publicly known password
 `quqa-test-password`; never expose it. Key-login tests generate their keys at
 run time and install them over a password session.
 
-The UI test also uses the server when the variables are set. On Linux,
+Engine and vault tests create their vaults in temporary folders with small
+Argon2id parameters; nothing touches your real app data.
+
+The UI test also uses the server when the variables are set. It starts the
+app with `QUQA_TEST_HOOKS=1`, a throw-away profile (`QUQA_USER_DATA`) and
+`QUQA_TEST_NO_OS_KEYSTORE=1` (act as if there were no OS key store, so the
+vault needs a master password); main honours the last two only together with
+the first. On Linux,
 Playwright starts Electron with `--no-sandbox` (Chromium's OS-level sandbox;
 the renderer's `sandbox`/`contextIsolation` preferences still apply and are
 checked). To test a packaged build, point
@@ -80,7 +87,9 @@ CI builds the Windows artifacts on `windows-latest` and uploads them.
 src/main/      Electron main: window, hardening, IPC relay (validates everything)
 src/preload/   contextBridge API (window.quqa), CommonJS for the sandbox
 src/engine/    SSH engine (ssh2) run as a utilityProcess; plain Node, unit-testable
-src/shared/    IPC contract: protocol.ts (no deps) and ipc.ts (TypeBox schemas)
+src/engine/vault/  encrypted vault (format and crypto: docs/adr/0002-vault.md)
+src/shared/    IPC contract: protocol.ts (no deps), ipc.ts (renderer ↔ main schemas, AppCalls),
+               engine-protocol.ts (main ↔ engine), csp.ts
 src/renderer/  React UI, xterm.js terminal
 test/e2e/      engine against a real SSH server
 test/ui/       Playwright smoke test of the Electron app

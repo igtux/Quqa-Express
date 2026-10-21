@@ -16,8 +16,8 @@ nodeGypRebuild: false
 extraMetadata:
   main: out/main/index.js
 publish: null
-# Electron fuses (flipped in the packaged binary). File-protocol privileges stay
-# on while the page loads from file://; a custom app:// protocol is backlog.
+# Electron fuses (flipped in the packaged binary). The page loads from our own
+# app:// protocol, so file:// keeps no extra privileges.
 electronFuses:
   runAsNode: false
   enableCookieEncryption: true
@@ -25,7 +25,7 @@ electronFuses:
   enableNodeCliInspectArguments: false
   enableEmbeddedAsarIntegrityValidation: true
   onlyLoadAppFromAsar: true
-  grantFileProtocolExtraPrivileges: true
+  grantFileProtocolExtraPrivileges: false
 win:
   target:
     - target: nsis

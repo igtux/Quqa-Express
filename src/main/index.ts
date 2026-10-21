@@ -2,8 +2,10 @@
  * Electron main process: one hardened window, the SSH engine in a
  * utilityProcess, and a narrow IPC relay between them. Every message from the
  * renderer is schema-checked here and must come from our own window's main
- * frame.
+ * frame. The renderer's files are served from app://quqa by our own protocol
+ * handler (no file:// access).
  */
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   app,
@@ -11,32 +13,48 @@ import {
   clipboard,
   ipcMain,
   Menu,
+  protocol,
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
 import type { Static, TSchema } from 'typebox';
 import Value from 'typebox/value';
+import { contentSecurityPolicy } from '../shared/csp.js';
 import {
   AckMessage,
+  AppCalls,
   Channel,
   ClipboardText,
   ConnectRequest,
   HostKeyAnswer,
   InputMessage,
   MAX_CLIPBOARD_LENGTH,
+  PromptAnswer,
   ResizeMessage,
   SessionMessage,
+  type AppMethod,
   type SessionEvent,
 } from '../shared/ipc.js';
 import { EngineHost } from './engine-host.js';
 import { hardenSessions } from './security.js';
-import { isAppUrl } from './urls.js';
+import { APP_ENTRY, APP_SCHEME, contentTypeOf, isAppUrl, resolveAppPath } from './urls.js';
+import { VaultBroker } from './vault-broker.js';
 
 const here = import.meta.dirname;
 const devServerUrl = !app.isPackaged ? process.env['ELECTRON_RENDERER_URL'] : undefined;
+const testHooks = process.env['QUQA_TEST_HOOKS'] === '1';
+
+// The UI smoke test runs against a throw-away profile.
+const testUserData = testHooks ? process.env['QUQA_USER_DATA'] : undefined;
+if (testUserData) app.setPath('userData', testUserData);
 
 // Chromium's renderer sandbox for every renderer, before the app is ready.
 app.enableSandbox();
+
+// app:// behaves like https for the page (secure context, same-origin rules).
+protocol.registerSchemesAsPrivileged([
+  { scheme: APP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -49,15 +67,33 @@ function start() {
   let nextSession = 0;
   /** Sessions belong to the window that opened them. */
   const owners = new Map<string, number>();
-  /** Open host-key prompts and the session each belongs to. */
+  /** Open host-key prompts, credential prompts and host-key changes, and their session. */
   const prompts = new Map<string, string>();
 
-  const engine = new EngineHost(join(here, 'engine.js'), (event: SessionEvent) => {
-    // A closed session keeps its owner (the user may reconnect) until disconnect.
-    const owner = owners.get(event.sessionId);
-    if (event.type === 'host-key') prompts.set(event.requestId, event.sessionId);
-    const target = BrowserWindow.getAllWindows().find((w) => w.webContents.id === owner);
-    target?.webContents.send(Channel.event, event);
+  const vaultPath = join(app.getPath('userData'), 'vault.json');
+  let broker: VaultBroker | null = null;
+
+  const engine = new EngineHost(join(here, 'engine.js'), {
+    onEvent(event: SessionEvent) {
+      // A closed session keeps its owner (the user may reconnect) until disconnect.
+      const owner = owners.get(event.sessionId);
+      if (
+        event.type === 'host-key' ||
+        event.type === 'prompt' ||
+        event.type === 'host-key-changed'
+      ) {
+        prompts.set(event.requestId, event.sessionId);
+      }
+      const target = BrowserWindow.getAllWindows().find((w) => w.webContents.id === owner);
+      target?.webContents.send(Channel.event, event);
+    },
+    onVaultState(state) {
+      broker?.vaultChanged(state);
+      window?.webContents.send(Channel.vaultEvent, state);
+    },
+    onStart() {
+      void broker?.engineStarted();
+    },
   });
 
   /** True if the message comes from our window's top frame showing our page. */
@@ -96,6 +132,18 @@ function start() {
     return { sessionId };
   });
 
+  ipcMain.handle(Channel.call, async (event, method: unknown, params: unknown) => {
+    if (!trusted(event) || !broker) throw new Error('Not allowed');
+    if (typeof method !== 'string' || !Object.hasOwn(AppCalls, method)) {
+      return { ok: false, code: 'invalid_request', message: 'Unknown request' };
+    }
+    const name = method as AppMethod;
+    if (!Value.Check(AppCalls[name].params, params)) {
+      return { ok: false, code: 'invalid_request', message: 'Invalid request' };
+    }
+    return broker.handle(name, params as never);
+  });
+
   on(Channel.input, InputMessage, (event, message) => {
     if (owns(event, message.sessionId)) engine.send({ type: 'input', ...message });
   });
@@ -108,6 +156,7 @@ function start() {
   on(Channel.disconnect, SessionMessage, (event, { sessionId }) => {
     if (!owns(event, sessionId)) return;
     owners.delete(sessionId);
+    for (const [requestId, owner] of prompts) if (owner === sessionId) prompts.delete(requestId);
     engine.send({ type: 'disconnect', sessionId });
   });
   on(Channel.reconnect, SessionMessage, (event, { sessionId }) => {
@@ -118,6 +167,12 @@ function start() {
     if (sessionId === undefined || !owns(event, sessionId)) return;
     prompts.delete(answer.requestId);
     engine.send({ type: 'host-key-answer', ...answer });
+  });
+  on(Channel.promptAnswer, PromptAnswer, (event, answer) => {
+    const sessionId = prompts.get(answer.requestId);
+    if (sessionId === undefined || !owns(event, sessionId)) return;
+    prompts.delete(answer.requestId);
+    engine.send({ type: 'prompt-answer', ...answer });
   });
   ipcMain.on(Channel.attention, (event) => {
     if (trusted(event) && window && !window.isFocused()) window.flashFrame(true);
@@ -131,6 +186,29 @@ function start() {
     if (!trusted(event)) throw new Error('Not allowed');
     return (await clipboard.readText()).slice(0, MAX_CLIPBOARD_LENGTH);
   });
+
+  /** Serves out/renderer at app://quqa/…; nothing outside it, nothing else. */
+  function serveRenderer() {
+    const root = join(here, '../renderer');
+    const policy = contentSecurityPolicy(false);
+    protocol.handle(APP_SCHEME, async (request) => {
+      const file = request.method === 'GET' ? resolveAppPath(request.url, root) : null;
+      if (!file) return new Response('Not found', { status: 404 });
+      try {
+        const body = await readFile(file);
+        return new Response(body, {
+          headers: {
+            'Content-Type': contentTypeOf(file),
+            'Content-Security-Policy': policy,
+            'X-Content-Type-Options': 'nosniff',
+            'Cache-Control': 'no-store',
+          },
+        });
+      } catch {
+        return new Response('Not found', { status: 404 });
+      }
+    });
+  }
 
   function createWindow() {
     window = new BrowserWindow({
@@ -154,9 +232,7 @@ function start() {
         spellcheck: false,
         devTools: !app.isPackaged,
         // Lets the UI smoke test read the terminal's text (WebGL draws no DOM text).
-        ...(process.env['QUQA_TEST_HOOKS'] === '1' && {
-          additionalArguments: ['--quqa-test-hooks'],
-        }),
+        ...(testHooks && { additionalArguments: ['--quqa-test-hooks'] }),
       },
     });
     window.once('ready-to-show', () => window?.show());
@@ -171,8 +247,7 @@ function start() {
       window = null;
     });
     const closedId = window.webContents.id;
-    if (devServerUrl) void window.loadURL(devServerUrl);
-    else void window.loadFile(join(here, '../renderer/index.html'));
+    void window.loadURL(devServerUrl ?? APP_ENTRY);
   }
 
   app.on('second-instance', () => {
@@ -185,6 +260,19 @@ function start() {
     () => {
       Menu.setApplicationMenu(null);
       hardenSessions(devServerUrl);
+      serveRenderer();
+      broker = new VaultBroker({
+        engine,
+        vaultPath,
+        window: () => window,
+        ownsChange: (requestId) => {
+          const sessionId = prompts.get(requestId);
+          return sessionId !== undefined && owners.has(sessionId);
+        },
+        forceNoOsKeyStore: testHooks && process.env['QUQA_TEST_NO_OS_KEYSTORE'] === '1',
+      });
+      broker.watchIdle();
+      engine.start();
       createWindow();
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();

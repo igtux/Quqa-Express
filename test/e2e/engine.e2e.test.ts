@@ -3,54 +3,98 @@
  * QUQA_TEST_SSH_HOST is set, as in the dev container:
  *
  *   docker compose -f docker/compose.yml run --rm dev pnpm test:e2e
+ *
+ * Every test gets its own vault in a temporary folder; keys are generated at
+ * run time and installed over a password session.
  */
-import { utils } from 'ssh2';
-import { afterEach, describe, expect, it } from 'vitest';
-import { describeHostKey } from '../../src/engine/host-keys.js';
-import { Engine, HIGH_WATER_BYTES } from '../../src/engine/engine.js';
-import { KnownHosts } from '../../src/engine/known-hosts.js';
+import { createHmac, randomBytes } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import ssh2 from 'ssh2';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { Engine, HIGH_WATER_BYTES, type EngineMessage } from '../../src/engine/engine.js';
 import type { ConnectRequest, SessionEvent } from '../../src/shared/ipc.js';
+
+const { Client, utils } = ssh2;
 
 const HOST = process.env['QUQA_TEST_SSH_HOST'];
 const PORT = Number(process.env['QUQA_TEST_SSH_PORT'] ?? 22);
 const USER = process.env['QUQA_TEST_SSH_USER'] ?? 'quqa';
 const PASSWORD = process.env['QUQA_TEST_SSH_PASSWORD'] ?? 'quqa-test-password';
+const VAULT_PASSWORD = 'e2e vault password';
+const FAST_KDF = { memoryKiB: 64, iterations: 1, parallelism: 1 };
 
 const password: ConnectRequest = {
   host: HOST ?? 'localhost',
   port: PORT,
   username: USER,
-  auth: { kind: 'password', password: PASSWORD },
+  auth: { kind: 'password' },
   cols: 80,
   rows: 24,
 };
 
+let root: string;
+beforeAll(async () => {
+  root = await mkdtemp(join(tmpdir(), 'quqa-e2e-'));
+});
+afterAll(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+interface HarnessOptions {
+  /** Accept host-key prompts automatically (true), refuse (false), or leave them (null). */
+  acceptHostKeys?: boolean | null;
+  /** Answers credential prompts with this (null: leave them unanswered). */
+  answer?: ((event: Extract<SessionEvent, { type: 'prompt' }>) => string[] | null) | null;
+  remember?: boolean;
+  /** Re-use a vault file (to test persistence). */
+  vaultPath?: string;
+}
+
 class Harness {
-  readonly events: SessionEvent[] = [];
+  readonly events: EngineMessage[] = [];
   readonly engine: Engine;
+  readonly vaultPath: string;
   private ids = 0;
 
-  constructor(
-    readonly knownHosts = new KnownHosts(),
-    /** Accept host-key prompts automatically (true), refuse (false), or leave them (null). */
-    private readonly autoAccept: boolean | null = true,
-  ) {
+  constructor(private readonly options: HarnessOptions = {}) {
+    this.vaultPath = options.vaultPath ?? join(root, `${randomBytes(6).toString('hex')}.json`);
     this.engine = new Engine(
       (event) => {
         this.events.push(event);
-        if (event.type === 'host-key' && this.autoAccept !== null) {
+        const accept = this.options.acceptHostKeys ?? true;
+        if (event.type === 'host-key' && accept !== null) {
+          queueMicrotask(() =>
+            this.engine.handle({ type: 'host-key-answer', requestId: event.requestId, accept }),
+          );
+        }
+        if (event.type === 'prompt' && this.options.answer !== null) {
+          const answers = (this.options.answer ?? (() => [PASSWORD]))(event);
           queueMicrotask(() =>
             this.engine.handle({
-              type: 'host-key-answer',
+              type: 'prompt-answer',
               requestId: event.requestId,
-              accept: this.autoAccept,
+              answers,
+              remember: this.options.remember ?? false,
             }),
           );
         }
       },
-      knownHosts,
-      { connectTimeoutMs: 10_000 },
+      { connectTimeoutMs: 10_000, kdf: FAST_KDF },
     );
+  }
+
+  /** Opens (creating if needed) and unlocks the vault. */
+  async open(): Promise<this> {
+    await this.engine.call('vault.open', { path: this.vaultPath });
+    const { state } = await this.engine.call('vault.status', {});
+    if (state === 'absent') {
+      await this.engine.call('vault.create', { mode: 'password', password: VAULT_PASSWORD });
+    } else {
+      await this.engine.call('vault.unlock', { password: VAULT_PASSWORD });
+    }
+    return this;
   }
 
   connect(request: ConnectRequest = password): string {
@@ -59,8 +103,10 @@ class Harness {
     return sessionId;
   }
 
-  of(sessionId: string) {
-    return this.events.filter((e) => e.sessionId === sessionId);
+  of(sessionId: string): SessionEvent[] {
+    return this.events.filter(
+      (e): e is SessionEvent => 'sessionId' in e && e.sessionId === sessionId,
+    );
   }
 
   async waitFor<T extends SessionEvent['type']>(
@@ -101,6 +147,18 @@ class Harness {
       already.acked = total;
     }
   }
+
+  /** Appends a public key to ~/.ssh/authorized_keys over a password session. */
+  async install(publicKey: string) {
+    const id = this.connect();
+    await this.waitFor(id, 'ready');
+    this.type(
+      id,
+      `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${publicKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo inst''alled\n`,
+    );
+    await this.waitForOutput(id, /\binstalled\r?\n/);
+    this.engine.handle({ type: 'disconnect', sessionId: id });
+  }
 }
 
 async function until<T>(probe: () => T | undefined, ms: number): Promise<T> {
@@ -113,23 +171,49 @@ async function until<T>(probe: () => T | undefined, ms: number): Promise<T> {
   }
 }
 
+/** The server's ed25519 host key blob, read without authenticating. */
+function scanHostKey(): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const client = new Client();
+    let key: Buffer | null = null;
+    const done = () => (key ? resolve(key) : reject(new Error('no host key')));
+    client.on('error', done);
+    client.on('close', done);
+    client.connect({
+      host: password.host,
+      port: PORT,
+      username: 'scan',
+      algorithms: { serverHostKey: ['ssh-ed25519'] },
+      hostVerifier: (blob: Buffer) => {
+        key = blob;
+        return false;
+      },
+    });
+  });
+}
+
 const harnesses: Harness[] = [];
-function harness(...args: ConstructorParameters<typeof Harness>) {
-  const h = new Harness(...args);
+async function harness(options?: HarnessOptions) {
+  const h = new Harness(options);
   harnesses.push(h);
-  return h;
+  return h.open();
 }
 afterEach(() => {
   for (const h of harnesses.splice(0)) h.engine.shutdown();
 });
 
 describe.skipIf(!HOST)('SSH engine against a real server', () => {
-  it('asks about the host key, runs a command, resizes and disconnects', async () => {
-    const h = harness();
+  it('checks the host key first, then asks for the password, runs a command and resizes', async () => {
+    const h = await harness();
     const id = h.connect();
     const prompt = await h.waitFor(id, 'host-key');
     expect(prompt.fingerprint).toMatch(/^SHA256:[A-Za-z0-9+/]{43}$/);
     expect(prompt.algorithm).toMatch(/^(ssh-ed25519|ecdsa-|rsa-|ssh-rsa)/);
+    const password = await h.waitFor(id, 'prompt');
+    expect(password).toMatchObject({ kind: 'password', canRemember: true, message: '' });
+    expect(password.title).toContain(`${USER}@`);
+    const events = h.of(id).map((e) => e.type);
+    expect(events.indexOf('host-key')).toBeLessThan(events.indexOf('prompt'));
     await h.waitFor(id, 'ready');
 
     // Quotes keep the typed command from matching the pattern by its echo.
@@ -146,95 +230,217 @@ describe.skipIf(!HOST)('SSH engine against a real server', () => {
     expect(h.engine.sessionCount).toBe(0);
   });
 
-  it('does not ask again for an accepted key', async () => {
-    const h = harness();
-    await h.waitFor(h.connect(), 'ready');
-    const second = h.connect();
-    await h.waitFor(second, 'ready');
-    expect(h.of(second).some((e) => e.type === 'host-key')).toBe(false);
+  it('remembers an accepted host key across an engine restart', async () => {
+    const first = await harness();
+    await first.waitFor(first.connect(), 'ready');
+    const again = first.connect();
+    await first.waitFor(again, 'ready');
+    expect(first.of(again).some((e) => e.type === 'host-key')).toBe(false);
+    const { pins } = await first.engine.call('hostKeys.list', {});
+    expect(pins).toEqual([
+      expect.objectContaining({ host: password.host.toLowerCase(), port: PORT, source: 'trusted' }),
+    ]);
+    first.engine.shutdown();
+
+    const second = await harness({ vaultPath: first.vaultPath, acceptHostKeys: null });
+    const id = second.connect();
+    await second.waitFor(id, 'ready');
+    expect(second.of(id).some((e) => e.type === 'host-key')).toBe(false);
   });
 
-  it('refuses a changed host key', async () => {
-    const knownHosts = new KnownHosts();
-    // Pin some other ed25519 key for the server.
+  it('blocks a changed host key, shows both fingerprints, and connects after the pin is replaced', async () => {
+    const h = await harness({ acceptHostKeys: false });
+    // A known_hosts entry pinning some other key for the server.
     const other = utils.parseKey(utils.generateKeyPairSync('ed25519').public);
-    if (other instanceof Error) throw other;
-    knownHosts.accept(password.host, PORT, describeHostKey(other.getPublicSSH()));
-    const h = harness(knownHosts);
+    if (other instanceof Error || Array.isArray(other)) throw new Error('bad key');
+    const name = PORT === 22 ? password.host : `[${password.host}]:${PORT}`;
+    const file = join(root, `known_hosts-${randomBytes(4).toString('hex')}`);
+    await writeFile(file, `${name} ssh-ed25519 ${other.getPublicSSH().toString('base64')}\n`);
+    expect(await h.engine.call('hostKeys.importPath', { path: file })).toMatchObject({
+      imported: 1,
+    });
+
     const id = h.connect();
+    const change = await h.waitFor(id, 'host-key-changed');
     const error = await h.waitFor(id, 'error');
     expect(error.code).toBe('host_key_mismatch');
     expect(error.message).toMatch(/has changed .*SHA256:/);
-    expect(h.of(id).some((e) => e.type === 'host-key')).toBe(false);
+    expect(change.previous).toHaveLength(1);
+    expect(change.previous[0]?.fingerprint).not.toBe(change.fingerprint);
+    expect(change.fingerprint).toMatch(/^SHA256:/);
+    expect(h.of(id).some((e) => e.type === 'host-key' || e.type === 'prompt')).toBe(false);
     await h.waitFor(id, 'closed');
+
+    // Still blocked on a retry until the user replaces the pin.
+    const before = h.of(id).length;
+    h.engine.handle({ type: 'reconnect', sessionId: id });
+    await until(
+      () =>
+        h
+          .of(id)
+          .slice(before)
+          .some((e) => e.type === 'closed')
+          ? true
+          : undefined,
+      15_000,
+    );
+    const retry = h.of(id).slice(before);
+    expect(retry.find((e) => e.type === 'error')).toMatchObject({ code: 'host_key_mismatch' });
+    const latest = retry.find((e) => e.type === 'host-key-changed');
+    if (latest?.type !== 'host-key-changed') throw new Error('no change event');
+
+    // The first token was superseded; the latest one works once.
+    await expect(
+      h.engine.call('hostKeys.replace', { requestId: change.requestId }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    await h.engine.call('hostKeys.replace', { requestId: latest.requestId });
+    await expect(
+      h.engine.call('hostKeys.replace', { requestId: latest.requestId }),
+    ).rejects.toMatchObject({ code: 'not_found' });
+    h.engine.handle({ type: 'reconnect', sessionId: id });
+    await until(() => (h.of(id).some((e) => e.type === 'ready') ? true : undefined), 15_000);
+    const { pins } = await h.engine.call('hostKeys.list', {});
+    expect(pins).toEqual([
+      expect.objectContaining({ fingerprint: latest.fingerprint, source: 'trusted' }),
+    ]);
+  });
+
+  it('trusts a hashed known_hosts entry', async () => {
+    const blob = await scanHostKey();
+    const salt = randomBytes(20);
+    const name =
+      PORT === 22 ? password.host.toLowerCase() : `[${password.host.toLowerCase()}]:${PORT}`;
+    const hash = createHmac('sha1', salt).update(name).digest();
+    const file = join(root, `known_hosts-${randomBytes(4).toString('hex')}`);
+    await writeFile(
+      file,
+      `|1|${salt.toString('base64')}|${hash.toString('base64')} ssh-ed25519 ${blob.toString('base64')}\n`,
+    );
+    const h = await harness({ acceptHostKeys: null });
+    expect(await h.engine.call('hostKeys.importPath', { path: file })).toMatchObject({ hashed: 1 });
+    const id = h.connect();
+    await h.waitFor(id, 'ready');
+    expect(h.of(id).some((e) => e.type === 'host-key')).toBe(false);
   });
 
   it('stops when the user rejects the host key', async () => {
-    const h = harness(new KnownHosts(), false);
+    const h = await harness({ acceptHostKeys: false });
     const id = h.connect();
     expect((await h.waitFor(id, 'error')).code).toBe('host_key_rejected');
-    expect(h.of(id).some((e) => e.type === 'ready')).toBe(false);
+    expect(h.of(id).some((e) => e.type === 'ready' || e.type === 'prompt')).toBe(false);
   });
 
-  it('waits for the user on the host-key prompt without timing out', async () => {
-    const events: SessionEvent[] = [];
-    const engine = new Engine((e) => events.push(e), new KnownHosts(), { connectTimeoutMs: 1000 });
-    try {
-      engine.handle({ type: 'connect', sessionId: 's1', request: password });
-      const prompt = await until(() => events.find((e) => e.type === 'host-key'), 10_000);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      expect(events.some((e) => e.type === 'error')).toBe(false);
-      if (prompt.type !== 'host-key') throw new Error('unreachable');
-      engine.handle({ type: 'host-key-answer', requestId: prompt.requestId, accept: true });
-      await until(() => events.find((e) => e.type === 'ready'), 10_000);
-    } finally {
-      engine.shutdown();
-    }
+  it('waits for the user on prompts without timing out', async () => {
+    const h = new Harness({ acceptHostKeys: null, answer: null });
+    harnesses.push(h);
+    await h.open();
+    // A short connect timeout: prompts must not count against it.
+    const engine = h.engine as unknown as { options: { connectTimeoutMs: number } };
+    engine.options.connectTimeoutMs = 1000;
+    const id = h.connect();
+    const hostKey = await h.waitFor(id, 'host-key');
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(h.of(id).some((e) => e.type === 'error')).toBe(false);
+    h.engine.handle({ type: 'host-key-answer', requestId: hostKey.requestId, accept: true });
+    const prompt = await h.waitFor(id, 'prompt');
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(h.of(id).some((e) => e.type === 'error')).toBe(false);
+    h.engine.handle({
+      type: 'prompt-answer',
+      requestId: prompt.requestId,
+      answers: [PASSWORD],
+      remember: false,
+    });
+    await h.waitFor(id, 'ready');
   });
 
-  it('reports a wrong password', async () => {
-    const h = harness();
-    const id = h.connect({ ...password, auth: { kind: 'password', password: 'wrong' } });
-    expect((await h.waitFor(id, 'error')).code).toBe('auth_failed');
-    await h.waitFor(id, 'closed');
+  it('asks again after a wrong password, and stops when cancelled', async () => {
+    let asked = 0;
+    const h = await harness({
+      answer: () => (++asked === 1 ? ['wrong'] : [PASSWORD]),
+    });
+    const id = h.connect();
+    await h.waitFor(id, 'ready');
+    const prompts = h.of(id).filter((e) => e.type === 'prompt');
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toMatchObject({ message: expect.stringMatching(/rejected/) });
+
+    const cancel = await harness({ answer: () => null });
+    const cancelled = cancel.connect();
+    expect((await cancel.waitFor(cancelled, 'error')).code).toBe('auth_cancelled');
+    await cancel.waitFor(cancelled, 'closed');
   });
 
-  it('logs in with an encrypted private key', async () => {
+  it('gives up after three wrong passwords', async () => {
+    const h = await harness({ answer: () => ['wrong'] });
+    const id = h.connect();
+    expect((await h.waitFor(id, 'error', 30_000)).code).toBe('auth_failed');
+    expect(h.of(id).filter((e) => e.type === 'prompt')).toHaveLength(3);
+  });
+
+  it('saves a password only when asked, and only after it worked', async () => {
+    const h = await harness({ remember: true });
+    await h.waitFor(h.connect(), 'ready');
+    const second = h.connect();
+    await h.waitFor(second, 'ready');
+    expect(h.of(second).some((e) => e.type === 'prompt')).toBe(false);
+  });
+
+  it('logs in with a generated key from the vault', async () => {
+    const h = await harness();
+    const key = await h.engine.call('keys.generate', { label: 'e2e generated' });
+    await h.install(key.publicKey);
+    const id = h.connect({ ...password, auth: { kind: 'key', keyId: key.id } });
+    await h.waitFor(id, 'ready');
+    expect(h.of(id).some((e) => e.type === 'prompt')).toBe(false);
+    h.type(id, 'echo key-lo""gin\n');
+    await h.waitForOutput(id, /\bkey-login\r?\n/);
+  });
+
+  it('logs in with an imported encrypted key, asking for its passphrase once per unlock', async () => {
     const pair = utils.generateKeyPairSync('ed25519', {
       passphrase: 'correct horse',
       cipher: 'aes256-ctr',
       rounds: 16,
       comment: 'quqa-e2e',
     });
-    // Install the public key over a password session.
-    const h = harness();
-    const setup = h.connect();
-    await h.waitFor(setup, 'ready');
-    h.type(
-      setup,
-      `mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '${pair.public}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && echo inst''alled\n`,
-    );
-    await h.waitForOutput(setup, /\binstalled\r?\n/);
-
-    const key = h.connect({
-      ...password,
-      auth: { kind: 'key', privateKey: pair.private, passphrase: 'correct horse' },
+    let wrongFirst = true;
+    const h = await harness({
+      answer: (event) => {
+        if (event.kind !== 'passphrase') return [PASSWORD];
+        const answer = wrongFirst ? 'wrong' : 'correct horse';
+        wrongFirst = false;
+        return [answer];
+      },
     });
-    await h.waitFor(key, 'ready');
-    h.type(key, 'echo key-lo""gin\n');
-    await h.waitForOutput(key, /\bkey-login\r?\n/);
-
-    const wrong = h.connect({
-      ...password,
-      auth: { kind: 'key', privateKey: pair.private, passphrase: 'wrong' },
+    await h.install(pair.public);
+    const key = await h.engine.call('keys.import', {
+      label: 'imported',
+      privateKey: pair.private,
+      passphrase: 'correct horse',
+      savePassphrase: false,
     });
-    expect((await h.waitFor(wrong, 'error')).code).toBe('invalid_key');
-    const missing = h.connect({ ...password, auth: { kind: 'key', privateKey: pair.private } });
-    expect((await h.waitFor(missing, 'error')).message).toMatch(/passphrase/);
+    const id = h.connect({ ...password, auth: { kind: 'key', keyId: key.id } });
+    await h.waitFor(id, 'ready');
+    const asked = h.of(id).filter((e) => e.type === 'prompt');
+    expect(asked.map((e) => e.type === 'prompt' && e.kind)).toEqual(['passphrase', 'passphrase']);
+    expect(asked[1]).toMatchObject({ message: expect.stringMatching(/wrong/) });
+
+    // Known for the rest of this unlock: no prompt the second time.
+    const again = h.connect({ ...password, auth: { kind: 'key', keyId: key.id } });
+    await h.waitFor(again, 'ready');
+    expect(h.of(again).some((e) => e.type === 'prompt')).toBe(false);
+
+    // Locking forgets it.
+    await h.engine.call('vault.lock', {});
+    await h.engine.call('vault.unlock', { password: VAULT_PASSWORD });
+    const third = h.connect({ ...password, auth: { kind: 'key', keyId: key.id } });
+    await h.waitFor(third, 'ready');
+    expect(h.of(third).some((e) => e.type === 'prompt')).toBe(true);
   });
 
   it('pauses output the terminal has not drawn, and resumes on ack', async () => {
-    const h = harness();
+    const h = await harness();
     const id = h.connect();
     await h.waitFor(id, 'ready');
     const acked = { acked: 0 };
@@ -264,19 +470,19 @@ describe.skipIf(!HOST)('SSH engine against a real server', () => {
     expect(h.received(id)).toBeGreaterThan(13_000_000);
   }, 90_000);
 
-  it('reports the shell exit status', async () => {
-    const h = harness();
+  it('reports the shell exit status and reconnects with the password it kept', async () => {
+    const h = await harness();
     const id = h.connect();
     await h.waitFor(id, 'ready');
     h.type(id, 'exit 3\n');
     expect((await h.waitFor(id, 'closed')).exitCode).toBe(3);
     expect(h.of(id).some((e) => e.type === 'error')).toBe(false);
 
-    // The session can be reopened with the credentials the engine kept.
     h.engine.handle({ type: 'reconnect', sessionId: id });
     await until(
       () => (h.of(id).filter((e) => e.type === 'ready').length === 2 ? true : undefined),
       15_000,
     );
+    expect(h.of(id).filter((e) => e.type === 'prompt')).toHaveLength(1);
   });
 });

@@ -67,16 +67,16 @@ describe('pin comparison', () => {
 });
 
 describe('KnownHosts', () => {
-  it('distinguishes unknown, trusted and changed keys per host and port', () => {
+  it('distinguishes unknown, trusted and changed keys per host and port', async () => {
     const hosts = new KnownHosts();
     expect(hosts.check('Example.com', 22, ED25519)).toBe('unknown');
-    hosts.accept('Example.com', 22, describeHostKey(ED25519));
+    await hosts.accept('Example.com', 22, describeHostKey(ED25519));
     expect(hosts.check('example.com', 22, ED25519)).toBe('trusted');
     expect(hosts.check('example.com', 22, RSA)).toBe('mismatch');
     expect(hosts.check('example.com', 2222, RSA)).toBe('unknown');
-    hosts.accept('example.com', 22, describeHostKey(ED25519));
+    await hosts.accept('example.com', 22, describeHostKey(ED25519));
     expect(hosts.pinsFor('example.com', 22)).toHaveLength(1);
-    hosts.forget('example.com', 22);
+    await hosts.forget('example.com', 22);
     expect(hosts.check('example.com', 22, ED25519)).toBe('unknown');
   });
 });

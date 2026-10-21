@@ -1,10 +1,12 @@
 /** The terminal filling the window, with a slim Jarvis-style header. */
 import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
-import type { Auth } from '../../../shared/ipc.js';
 import type { ConnState, TerminalSession } from '../terminal/connection.js';
 import { ClipboardDialog } from './ClipboardDialog.js';
+import { CredentialDialog } from './CredentialDialog.js';
+import { HostKeyChangedScreen } from './HostKeyChanged.js';
 import { HostKeyDialog } from './HostKeyDialog.js';
 import { Icon } from './icons.js';
+import { PasteDialog } from './PasteDialog.js';
 
 const STATUS_CLASS: Record<ConnState, string> = {
   connecting: 'connecting',
@@ -18,12 +20,9 @@ const STATUS_CLASS: Record<ConnState, string> = {
 
 export function TerminalScreen({
   session,
-  takeAuth,
   onClose,
 }: {
   session: TerminalSession;
-  /** Hands over the credentials once; the screen connects after the terminal is sized. */
-  takeAuth: () => Auth | null;
   onClose(): void;
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -33,9 +32,9 @@ export function TerminalScreen({
     const parent = container.current;
     if (!parent) return;
     session.mount(parent);
-    const auth = takeAuth();
-    if (auth) void session.connect(auth);
-  }, [session, takeAuth]);
+    // Connects once, after the terminal has its size.
+    void session.connect();
+  }, [session]);
 
   useEffect(() => {
     const onResize = () => session.scheduleFit(50);
@@ -104,6 +103,27 @@ export function TerminalScreen({
           </div>
         )}
       </div>
+      {snapshot.hostKeyChanged && (
+        <HostKeyChangedScreen
+          key={snapshot.hostKeyChanged.requestId}
+          change={snapshot.hostKeyChanged}
+          onReplace={() => session.replaceHostKey()}
+          onClose={onClose}
+        />
+      )}
+      {snapshot.prompt && (
+        <CredentialDialog
+          key={snapshot.prompt.requestId}
+          prompt={snapshot.prompt}
+          onAnswer={(answers, remember) => session.answerPrompt(answers, remember)}
+        />
+      )}
+      {snapshot.pasteRequest && (
+        <PasteDialog
+          request={snapshot.pasteRequest}
+          onAnswer={(allow) => session.answerPaste(allow)}
+        />
+      )}
       {snapshot.hostKey && (
         <HostKeyDialog
           key={snapshot.hostKey.requestId}

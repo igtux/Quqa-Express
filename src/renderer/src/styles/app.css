@@ -595,3 +595,263 @@ body {
     flex: 1;
   }
 }
+
+/* ----- Vault, home tabs, lists (Phase 2) ---------------------------------- */
+.app-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.vault-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  background: rgba(10, 10, 15, 0.92);
+  backdrop-filter: blur(6px);
+}
+
+.vault-intro {
+  display: block;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.system-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.system-check input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.system-btn.inline {
+  width: auto;
+  padding: 9px 14px;
+}
+
+.home-card {
+  max-width: 680px;
+  align-self: flex-start;
+  margin-top: 6vh;
+}
+
+.home-header {
+  gap: 14px;
+}
+
+.home-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.home-tabs button {
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.home-tabs button:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.home-tabs button[aria-selected='true'] {
+  color: var(--text-primary);
+  background: rgba(99, 102, 241, 0.18);
+}
+
+.lock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+}
+
+.lock-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.panel {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.panel-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.panel-row .system-input {
+  flex: 1;
+  min-width: 180px;
+}
+
+.panel-form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--bg-tertiary);
+}
+
+.panel-empty {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  padding: 12px 0;
+}
+
+.item-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--bg-tertiary);
+  border-radius: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.item + .item {
+  border-top: 1px solid var(--bg-tertiary);
+}
+
+.item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.item-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.item-badge {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.item-mono {
+  font-family: var(--font-mono-ui);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+  user-select: all;
+}
+
+.item-meta {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.item-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.link-btn.danger {
+  color: var(--error);
+}
+
+.terminal-decision-btn.danger {
+  background: #4a1d1d;
+  border-color: #b91c1c;
+  color: #fecaca;
+}
+
+.terminal-decision-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.terminal-decision-icon.danger {
+  color: var(--error);
+}
+
+.terminal-decision-note.error {
+  color: #fca5a5;
+}
+
+.host-key-changed {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(10, 10, 15, 0.94);
+  overflow: auto;
+}
+
+.host-key-changed-card {
+  width: min(600px, 100%);
+  padding: 20px 22px 0;
+  background: #18212d;
+  border: 1px solid #7f1d1d;
+  border-radius: 18px;
+  box-shadow: 0 24px 80px #0009;
+  color: #e2e8f0;
+  font:
+    14px/1.55 system-ui,
+    sans-serif;
+}
+
+.host-key-changed-card .terminal-decision-actions {
+  margin: 16px -22px 0;
+}
+
+.hkc-label {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.terminal-decision-fingerprint.old {
+  opacity: 0.7;
+  text-decoration: line-through;
+  text-decoration-color: #b91c1c;
+}
+
+.terminal-window {
+  position: relative;
+}

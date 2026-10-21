@@ -16,7 +16,12 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal as XTerm } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import type { Auth, QuqaApi } from '../../../shared/ipc.js';
-import { FATAL_ERRORS, type SessionEvent, type SshErrorCode } from '../../../shared/protocol.js';
+import {
+  FATAL_ERRORS,
+  type PromptKind,
+  type SessionEvent,
+  type SshErrorCode,
+} from '../../../shared/protocol.js';
 import {
   sliceInput,
   PASTE_CHUNK,
@@ -25,6 +30,7 @@ import {
   RECONNECT_DELAYS_S,
 } from './input.js';
 import { parseOsc52 } from './osc52.js';
+import { pasteRisks, type PasteRisk } from './paste.js';
 import {
   clampZoom,
   computeFontSize,
@@ -57,6 +63,31 @@ export interface HostKeyPrompt {
   fingerprint: string;
 }
 
+/** The engine asks for a password, passphrase or keyboard-interactive answers. */
+export interface CredentialPrompt {
+  requestId: string;
+  kind: PromptKind;
+  title: string;
+  message: string;
+  prompts: { label: string; echo: boolean }[];
+  canRemember: boolean;
+}
+
+/** The server's key differs from the pinned one; the connection was refused. */
+export interface HostKeyChange {
+  requestId: string;
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
+  previous: { algorithm: string; fingerprint: string }[];
+}
+
+export interface PasteRequest {
+  text: string;
+  risks: PasteRisk[];
+}
+
 export interface ConnSnapshot {
   state: ConnState;
   statusText: string;
@@ -65,6 +96,10 @@ export interface ConnSnapshot {
   errorCode: SshErrorCode | null;
   attempt: number;
   hostKey: HostKeyPrompt | null;
+  prompt: CredentialPrompt | null;
+  hostKeyChanged: HostKeyChange | null;
+  /** A risky paste waiting for the user's decision. */
+  pasteRequest: PasteRequest | null;
   /** Text a remote program asked to put on the clipboard, awaiting the user. */
   clipboardRequest: string | null;
   /** Characters still queued from a large paste. */
@@ -76,6 +111,8 @@ export interface Target {
   host: string;
   port: number;
   username: string;
+  /** No secrets: a key id, or "password" (the engine asks or uses the saved one). */
+  auth: Auth;
 }
 
 /** Routes the bridge's single event stream to sessions by id. */
@@ -110,6 +147,8 @@ const ACK_DELAY_MS = 30;
 
 const FATAL_TEXT: Partial<Record<SshErrorCode, string>> = {
   auth_failed: 'Access denied',
+  auth_cancelled: 'Login cancelled',
+  vault_locked: 'Vault locked',
   host_key_mismatch: 'Host key changed — refused',
   host_key_rejected: 'Host key not accepted',
   invalid_key: 'Private key unreadable',
@@ -134,11 +173,15 @@ export class TerminalSession {
     errorCode: null,
     attempt: 0,
     hostKey: null,
+    prompt: null,
+    hostKeyChanged: null,
+    pasteRequest: null,
     clipboardRequest: null,
     pendingInput: 0,
     renderer: 'dom',
   };
   private opened = false;
+  private started = false;
   private disposed = false;
   private zoom = readZoom();
   private lastSize = { cols: 0, rows: 0 };
@@ -216,6 +259,18 @@ export class TerminalSession {
       event.preventDefault();
       void this.pasteFromClipboard();
     });
+    // Every other paste (middle click, drag and drop of text, the browser's
+    // own shortcut) goes through the same checks instead of xterm's handler.
+    this.element.addEventListener(
+      'paste',
+      (event) => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const text = event.clipboardData?.getData('text/plain') ?? '';
+        if (text) this.pasteText(text);
+      },
+      { capture: true },
+    );
   }
 
   /* ----- Observing --------------------------------------------------------- */
@@ -274,6 +329,13 @@ export class TerminalSession {
 
   focus(): void {
     if (this.opened) this.term.focus();
+  }
+
+  /** Focus after a dialog has closed (closing a modal <dialog> moves focus itself). */
+  private refocus(): void {
+    setTimeout(() => {
+      if (!this.disposed) this.focus();
+    }, 0);
   }
 
   scheduleFit(delay = 100): void {
@@ -346,14 +408,15 @@ export class TerminalSession {
 
   /* ----- Connection -------------------------------------------------------- */
 
-  /** Opens the session. The credentials go to the engine and are not kept here. */
-  async connect(auth: Auth): Promise<void> {
+  /** Opens the session (once). No secrets: the engine asks for what it needs. */
+  async connect(): Promise<void> {
+    if (this.started) return;
+    this.started = true;
     this.fitNow();
     this.update({ state: 'connecting', statusText: 'Connecting…', reason: '', errorCode: null });
     try {
       const { sessionId } = await this.api.connect({
         ...this.target,
-        auth,
         cols: Math.max(2, this.term.cols),
         rows: Math.max(1, this.term.rows),
       });
@@ -388,6 +451,30 @@ export class TerminalSession {
           },
         });
         break;
+      case 'prompt':
+        this.update({
+          prompt: {
+            requestId: event.requestId,
+            kind: event.kind,
+            title: event.title,
+            message: event.message,
+            prompts: event.prompts,
+            canRemember: event.canRemember,
+          },
+        });
+        break;
+      case 'host-key-changed':
+        this.update({
+          hostKeyChanged: {
+            requestId: event.requestId,
+            host: event.host,
+            port: event.port,
+            algorithm: event.algorithm,
+            fingerprint: event.fingerprint,
+            previous: event.previous,
+          },
+        });
+        break;
       case 'ready':
         this.lastError = null;
         this.lastSize = { cols: 0, rows: 0 };
@@ -398,6 +485,8 @@ export class TerminalSession {
           errorCode: null,
           attempt: 0,
           hostKey: null,
+          prompt: null,
+          hostKeyChanged: null,
         });
         this.fitNow();
         this.flushPaste();
@@ -428,11 +517,33 @@ export class TerminalSession {
     });
   }
 
+  /**
+   * Sends the user's answer once; the dialog keeps nothing. `null` cancels.
+   * The engine holds the secret from here on (for reconnects) until the vault locks.
+   */
+  answerPrompt(answers: string[] | null, remember: boolean): void {
+    const prompt = this.snapshot.prompt;
+    if (!prompt) return;
+    this.api.answerPrompt({ requestId: prompt.requestId, answers, remember });
+    this.update({ prompt: null });
+  }
+
+  /** After the user confirmed twice: pin the key the engine saw, then connect again. */
+  async replaceHostKey(): Promise<string | null> {
+    const change = this.snapshot.hostKeyChanged;
+    if (!change) return null;
+    const result = await this.api.call('hostKeys.replace', { requestId: change.requestId });
+    if (!result.ok) return result.message;
+    this.update({ hostKeyChanged: null });
+    this.reconnectNow();
+    return null;
+  }
+
   answerClipboard(allow: boolean): void {
     const text = this.snapshot.clipboardRequest;
     this.update({ clipboardRequest: null });
     if (allow && text) void this.api.clipboardWrite(text).catch(() => undefined);
-    this.focus();
+    this.refocus();
   }
 
   private acknowledge(bytes: number) {
@@ -455,6 +566,7 @@ export class TerminalSession {
   private handleClosed(exitCode: number | null) {
     if (this.disposed) return;
     this.cancelPendingInput();
+    this.update({ prompt: null, pasteRequest: null });
     this.pendingAck = 0;
     const error = this.lastError;
     this.lastError = null;
@@ -512,7 +624,7 @@ export class TerminalSession {
 
   private reopen() {
     if (this.disposed || !this.sessionId) return;
-    this.update({ state: 'connecting', statusText: 'Connecting…' });
+    this.update({ state: 'connecting', statusText: 'Connecting…', hostKeyChanged: null });
     this.api.reconnect(this.sessionId);
   }
 
@@ -538,11 +650,29 @@ export class TerminalSession {
     if (this.snapshot.state !== 'connected') return;
     try {
       const text = await this.api.clipboardRead();
-      // xterm adds bracketed-paste markers when the program asked for them.
-      if (text) this.term.paste(text);
+      if (text) this.pasteText(text);
     } catch {
       // Clipboard unavailable.
     }
+  }
+
+  /** Pastes, asking first when the text could run commands or drive the terminal. */
+  pasteText(text: string): void {
+    if (this.snapshot.state !== 'connected' || this.snapshot.pasteRequest) return;
+    const risks = pasteRisks(text, this.term.modes.bracketedPasteMode);
+    if (risks.length > 0) {
+      this.update({ pasteRequest: { text, risks } });
+      return;
+    }
+    // xterm adds bracketed-paste markers when the program asked for them.
+    this.term.paste(text);
+  }
+
+  answerPaste(allow: boolean): void {
+    const request = this.snapshot.pasteRequest;
+    this.update({ pasteRequest: null });
+    if (allow && request && this.snapshot.state === 'connected') this.term.paste(request.text);
+    this.refocus();
   }
 
   private queuedLength() {

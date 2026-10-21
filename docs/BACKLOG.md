@@ -12,6 +12,9 @@ Short names: `gw/` = `apps/ssh-gateway/src/`, `web/` = `apps/web/src/`,
 
 ## Phase 1: Electron shell, hardened IPC, SSH engine, one terminal
 
+**Status: done** (e790750). The `app://` protocol, engine-side password
+prompts and paste warnings, left open here, were finished in Phase 2.
+
 ### 1.1 Repository and tooling
 - **AC:** pnpm workspace, TypeScript strict, ESLint, Prettier, Vitest;
   `pnpm check` (typecheck + lint + test) passes on a clean clone; lockfile
@@ -65,6 +68,25 @@ Short names: `gw/` = `apps/ssh-gateway/src/`, `web/` = `apps/web/src/`,
 ---
 
 ## Phase 2: Vault, keys, host-key trust
+
+**Status: done**, except where noted below. Design: ADR 0002.
+
+- 2.1 done: vault file with modes `os` / `os+password` / `password`
+  (portable), auto-lock on idle, sleep and screen lock, unlock screen,
+  atomic writes with `.bak`, versioned format with migrations and KDF
+  upgrade; tests for round trip, wrong password, tampering, moved items,
+  versions and lock.
+- 2.2 done: generate, import (paste or file; OpenSSH/PEM/PPK via ssh2) with
+  saved or per-unlock passphrase, list, copy / export public key, delete.
+  Open: the "used by N hosts" count needs saved hosts (Phase 3).
+- 2.3 partly: password and keyboard-interactive prompts engine-side, opt-in
+  saved passwords. Open: "Install my public key on this host" (needs SFTP,
+  Phase 4).
+- 2.4 partly: pins persist in the vault, TOFU prompt, changed-key block with
+  old/new fingerprints and a two-step replace, known_hosts import (plain
+  and hashed). Open: scan without authenticating / Re-check in Edit Host /
+  re-check on address change (need the hosts manager, Phase 3); strict
+  mode stays v1.x.
 
 ### 2.1 Vault
 - **AC:** encrypted vault file; per-item XChaCha20-Poly1305 (or AES-256-GCM)

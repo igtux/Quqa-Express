@@ -34,6 +34,8 @@
     "dist:linux": "electron-vite build && electron-builder --linux AppImage"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "ssh2": "^1.17.0",
     "typebox": "^1.4.2"
   },

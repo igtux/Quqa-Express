@@ -4,7 +4,7 @@
  */
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { Channel } from '../shared/protocol.js';
-import type { QuqaApi, SessionEvent } from '../shared/ipc.js';
+import type { QuqaApi, SessionEvent, VaultState } from '../shared/ipc.js';
 
 const api: QuqaApi = {
   connect: (request) => ipcRenderer.invoke(Channel.connect, request),
@@ -14,11 +14,20 @@ const api: QuqaApi = {
   disconnect: (sessionId) => ipcRenderer.send(Channel.disconnect, { sessionId }),
   reconnect: (sessionId) => ipcRenderer.send(Channel.reconnect, { sessionId }),
   answerHostKey: (answer) => ipcRenderer.send(Channel.hostKeyAnswer, answer),
+  answerPrompt: (answer) => ipcRenderer.send(Channel.promptAnswer, answer),
+  call: (method, params) => ipcRenderer.invoke(Channel.call, method, params),
   onEvent: (listener) => {
     const handler = (_event: IpcRendererEvent, event: SessionEvent) => listener(event);
     ipcRenderer.on(Channel.event, handler);
     return () => {
       ipcRenderer.removeListener(Channel.event, handler);
+    };
+  },
+  onVaultChange: (listener) => {
+    const handler = (_event: IpcRendererEvent, state: VaultState) => listener(state);
+    ipcRenderer.on(Channel.vaultEvent, handler);
+    return () => {
+      ipcRenderer.removeListener(Channel.vaultEvent, handler);
     };
   },
   clipboardWrite: (text) => ipcRenderer.invoke(Channel.clipboardWrite, text),

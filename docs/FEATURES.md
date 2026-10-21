@@ -12,6 +12,9 @@ there.
 
 ## Status
 
+Rows marked **Built (Phase n)** are implemented; see `docs/BACKLOG.md` for
+what each phase finished and what is still open.
+
 | Status       | Meaning                                                                     |
 | ------------ | --------------------------------------------------------------------------- |
 | **v1**       | In the first public release.                                                |
@@ -112,7 +115,7 @@ Short names used below:
 | Ctrl/Cmd+V pastes text through xterm (bracketed paste kept) | `term/connection.ts` | v1 | Same, plus Ctrl+Shift+V and right-click paste (setting). |
 | Paste button in the toolbar | `term/TerminalModal.tsx` | v1 | Same. |
 | Chunked paste: large input sent in 4 KiB slices with progress and **Cancel paste** | `term/connection.ts` (PASTE_CHUNK), `term/TerminalProvider.tsx` | v1 | Same; slicing happens in the engine, the renderer only shows progress and cancel. |
-| Paste safety warning (multi-line or very large paste, paste containing control characters) | — (new) | v1 | New: confirm dialog before sending multi-line text outside bracketed paste and before pastes over a size limit; "don't ask again" per host. |
+| Paste safety warning (multi-line or very large paste, paste containing control characters) | — (new) | v1 | New: confirm dialog before sending multi-line text outside bracketed paste and before pastes over a size limit; "don't ask again" per host. **Built (Phase 2), always on, also for control characters; "don't ask again" waits for per-host settings.** |
 | OSC 52 clipboard write from programs (Claude Code inside tmux); read requests ignored; tmux `set-clipboard on` + passthrough set on attach | `term/connection.ts`, `gw/terminals/tmux-attach.ts` | v1 | Write requires a confirm per host the first time ("Allow this host to set the clipboard?") then may be remembered; reads always denied. |
 | Refused clipboard write → notice with a **Copy** button | `term/connection.ts`, `term/TerminalProvider.tsx` | v1 | Kept for the "ask" case: the notice shows the text and a Copy button. |
 | Shortcuts work on Georgian and other non-Latin layouts (match by key code) | `web/kit/keys.ts` | v1 | Ported. |
@@ -168,14 +171,14 @@ Short names used below:
 
 | Feature | Jarvis | Status | quqa-express mapping |
 | --- | --- | --- | --- |
-| Generate Ed25519 key (retry until ssh2 can parse it back), optional comment | `gw/credentials/credential-store.ts` (`generateEd25519`) | v1 | Ported into the engine. Also RSA-4096 and ECDSA for old servers (v1.x). |
-| Import an existing private key (OpenSSH/PEM/PPK), with passphrase; key text dropped right after | `gw/credentials/credential-store.ts`, `mach/SshKeysTab.tsx` | v1 | Renderer sends a file path or pasted text once to the engine, never stores it; the engine parses and seals it. |
-| Keys list: label, type, fingerprint, created; Copy public key; Delete | `mach/SshKeysTab.tsx` | v1 | Same; delete warns when hosts use the key. |
-| Private keys sealed at rest (AES-256-GCM bound to a context string) and never returned by any API | `packages/crypto/src/secret-box.ts`, `gw/credentials/credential-store.ts` | v1 | Vault: per-item XChaCha20-Poly1305 (or AES-256-GCM) with the item id as associated data; data key wrapped by Electron `safeStorage` (DPAPI) and optionally a master password (Argon2id). See ADR 0001. |
-| Passphrase sealed with the key | `gw/credentials/credential-store.ts` | v1 | Option: store the passphrase in the vault, or ask each time (kept in engine memory for the session only). |
+| Generate Ed25519 key (retry until ssh2 can parse it back), optional comment | `gw/credentials/credential-store.ts` (`generateEd25519`) | v1 | Ported into the engine. Also RSA-4096 and ECDSA for old servers (v1.x). **Built (Phase 2).** |
+| Import an existing private key (OpenSSH/PEM/PPK), with passphrase; key text dropped right after | `gw/credentials/credential-store.ts`, `mach/SshKeysTab.tsx` | v1 | Renderer sends a file path or pasted text once to the engine, never stores it; the engine parses and seals it. **Built (Phase 2); files are read by the engine from a main-process dialog.** |
+| Keys list: label, type, fingerprint, created; Copy public key; Delete | `mach/SshKeysTab.tsx` | v1 | Same; delete warns when hosts use the key. **Built (Phase 2), plus Export public key; the per-host count waits for saved hosts.** |
+| Private keys sealed at rest (AES-256-GCM bound to a context string) and never returned by any API | `packages/crypto/src/secret-box.ts`, `gw/credentials/credential-store.ts` | v1 | Vault: per-item XChaCha20-Poly1305 (or AES-256-GCM) with the item id as associated data; data key wrapped by Electron `safeStorage` (DPAPI) and optionally a master password (Argon2id). See ADR 0001. **Built (Phase 2): XChaCha20-Poly1305 + Argon2id (@noble), ADR 0002.** |
+| Passphrase sealed with the key | `gw/credentials/credential-store.ts` | v1 | Option: store the passphrase in the vault, or ask each time (kept in engine memory for the session only). **Built (Phase 2).** |
 | Re-authentication before importing a key | `mach/SshKeysTab.tsx` | v1.x | Becomes "unlock the vault" when a master password is set. |
 | Install a public key on a host (`ssh-copy-id` equivalent) after a password login | — | v1 | New: engine appends to `~/.ssh/authorized_keys` over SFTP (no shell string building). |
-| Password authentication and keyboard-interactive (2FA prompts) | — (Jarvis is key-only) | v1 | New: prompts are shown by the renderer, answers go straight to the engine; saving the password in the vault is opt-in. |
+| Password authentication and keyboard-interactive (2FA prompts) | — (Jarvis is key-only) | v1 | New: prompts are shown by the renderer, answers go straight to the engine; saving the password in the vault is opt-in. **Built (Phase 2): prompts are engine requests, answered once from a dialog.** |
 | SSH agent: Windows OpenSSH agent pipe, Pageant | — | v1 | Engine uses ssh2's agent support; agent forwarding off by default, per host opt-in with a warning. |
 | Hardware keys (FIDO2 `sk-` keys) | — | later | Through the system agent. |
 
@@ -183,12 +186,12 @@ Short names used below:
 
 | Feature | Jarvis | Status | quqa-express mapping |
 | --- | --- | --- | --- |
-| Host keys pinned and verified on every new connection | `gw/ssh/connection-pool.ts`, `gw/ssh/host-keys.ts` | v1 | Same, in the engine. |
+| Host keys pinned and verified on every new connection | `gw/ssh/connection-pool.ts`, `gw/ssh/host-keys.ts` | v1 | Same, in the engine. **Built (Phase 2): pins persist in the vault.** |
 | Scan a host's key without authenticating (strongest type first, stop at the first) | `gw/ssh/host-key-scan.ts` | v1 | Same. |
-| Trust dialog: compare SHA256 fingerprints, tick the ones to pin, "Trust host" | `mach/HostKeyTrust.tsx`, `term/HostKeyDialog.tsx` | v1 | First connection shows the prompt (TOFU with an explicit decision: Jarvis has no TOFU because a server shares it; on one's own desktop the prompt is the standard model). The engine pins what it scanned, never key material from the renderer. |
-| Changed key blocks the connection; "SSH host key changed" dialog with the previous fingerprint and a warning; "Trust replacement key" | `mach/HostKeyTrust.tsx`, legacy-ui `01b` §10.4 | v1 | Same; replacement needs a deliberate second confirm. |
+| Trust dialog: compare SHA256 fingerprints, tick the ones to pin, "Trust host" | `mach/HostKeyTrust.tsx`, `term/HostKeyDialog.tsx` | v1 | First connection shows the prompt (TOFU with an explicit decision: Jarvis has no TOFU because a server shares it; on one's own desktop the prompt is the standard model). The engine pins what it scanned, never key material from the renderer. **Built (Phase 2) as the first-connection prompt.** |
+| Changed key blocks the connection; "SSH host key changed" dialog with the previous fingerprint and a warning; "Trust replacement key" | `mach/HostKeyTrust.tsx`, legacy-ui `01b` §10.4 | v1 | Same; replacement needs a deliberate second confirm. **Built (Phase 2).** |
 | Re-check host key (Edit Host) | `mach/HostForms.tsx` | v1 | Same. |
-| Read `~/.ssh/known_hosts` (incl. hashed entries) as an extra trust source; optional write-back | — | v1 | New: import pins from known_hosts; write-back is off by default. |
+| Read `~/.ssh/known_hosts` (incl. hashed entries) as an extra trust source; optional write-back | — | v1 | New: import pins from known_hosts; write-back is off by default. **Import built (Phase 2); write-back not yet.** |
 | Strict mode (never prompt, refuse unknown keys) | — | v1.x | Setting. |
 
 ## 10. Sessions dock, favorites and switcher
