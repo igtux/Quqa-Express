@@ -15,6 +15,7 @@ import ssh2 from 'ssh2';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Engine, HIGH_WATER_BYTES, type EngineMessage } from '../../src/engine/engine.js';
 import type { AdhocConnect, ConnectRequest, SessionEvent } from '../../src/shared/ipc.js';
+import { PASTE_CHUNK, sliceInput } from '../../src/renderer/src/terminal/input.js';
 import { ed25519Pair } from '../keypair.js';
 
 const { Client, utils } = ssh2;
@@ -229,6 +230,30 @@ describe.skipIf(!HOST)('SSH engine against a real server', () => {
     h.engine.handle({ type: 'disconnect', sessionId: id });
     await h.waitFor(id, 'closed');
     expect(h.engine.sessionCount).toBe(0);
+  });
+
+  it('pastes Georgian, Mtavruli and emoji text byte for byte, also in 4 KiB slices', async () => {
+    const h = await harness();
+    const id = h.connect();
+    await h.waitFor(id, 'ready');
+    const line = 'გამარჯობა, მსოფლიო! ქართული ტექსტი — ႢႠႰႨႡ ᲒᲐᲛᲐᲠᲯᲝᲑᲐ 🇬🇪👋\n';
+    // Large enough to go in slices, as a big paste does (sliceInput keeps surrogate pairs whole).
+    const text = line.repeat(Math.ceil((3 * PASTE_CHUNK) / line.length));
+    const bytes = Buffer.from(text, 'utf8');
+    const slices = sliceInput(text);
+    expect(slices.length).toBeGreaterThan(2);
+    // Raw mode, so the tty passes every byte through untouched (no line limit, no echo).
+    h.type(
+      id,
+      `stty raw -echo; echo rea''dy; head -c ${bytes.length} > ~/paste.txt; stty sane; echo "b64:$(base64 -w0 ~/paste.txt):end"; rm -f ~/paste.txt\n`,
+    );
+    await h.waitForOutput(id, /\bready\r?\n/);
+    for (const slice of slices) h.type(id, slice);
+    const out = await h.waitForOutput(id, /b64:([A-Za-z0-9+/=]*):end/, 20_000);
+    const received = Buffer.from(/b64:([A-Za-z0-9+/=]*):end/.exec(out)?.[1] ?? '', 'base64');
+    expect(received.equals(bytes)).toBe(true);
+    expect(received.toString('utf8')).toBe(text);
+    h.engine.handle({ type: 'disconnect', sessionId: id });
   });
 
   it('remembers an accepted host key across an engine restart', async () => {

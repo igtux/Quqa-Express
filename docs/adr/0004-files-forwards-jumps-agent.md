@@ -41,6 +41,9 @@ queue so they never hold up vault calls.
 - Image paste: main reads the clipboard itself (an image, or on Windows the
   files Explorer copied), writes an image to a private temporary file and
   deletes it after the upload. The renderer only says "paste for session S".
+  Main reads the clipboard (text or upload) only within a few seconds of a
+  key press or click it saw itself (`webContents` `input-event`,
+  `src/main/gesture.ts`), so the page cannot read it on its own.
 
 ### Remote paths and file roots
 

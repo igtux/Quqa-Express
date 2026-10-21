@@ -16,7 +16,11 @@ export const SHORTCUTS: [string, string][] = [
   ['Alt+Shift+1…8', 'Open favorite 1…8'],
   ['Ctrl+Shift+H', 'Hosts'],
   ['Ctrl+Shift+F', 'Search the scrollback (Enter next, Shift+Enter previous)'],
-  ['Ctrl+Shift+C / Ctrl+Shift+V', 'Copy / paste (right click pastes too)'],
+  [
+    'Ctrl+V / Ctrl+Shift+V / Shift+Insert',
+    'Paste text, an image or copied files (right click too)',
+  ],
+  ['Ctrl+C with a selection / Ctrl+Shift+C', 'Copy (Ctrl+C without a selection interrupts)'],
   ['Ctrl+click a link', 'Open an http(s) address in your browser'],
   ['Ctrl+= / Ctrl+- / Ctrl+0', 'Larger / smaller / default text'],
   ['F11', 'Full screen'],

@@ -112,8 +112,8 @@ Short names used below:
 | Feature | Jarvis | Status | quqa-express mapping |
 | --- | --- | --- | --- |
 | Copy on select (desktop) with "Copied" notice | `term/connection.ts` | v1 | Same (setting: copy on select on/off). Ctrl+Shift+C also copies. |
-| Ctrl/Cmd+V pastes text through xterm (bracketed paste kept) | `term/connection.ts` | v1 | Same, plus Ctrl+Shift+V and right-click paste (setting). |
-| Paste button in the toolbar | `term/TerminalModal.tsx` | v1 | Same. |
+| Ctrl/Cmd+V pastes text through xterm (bracketed paste kept) | `term/connection.ts` | v1 | Same, plus Ctrl+Shift+V, Shift+Insert and right-click paste; Ctrl+C copies while text is selected, else stays ^C; Ctrl+Insert copies. Matched by physical key (Georgian, Russian layouts). Main reads the clipboard, only right after a key press or click. **Built (0.1.0-beta.8).** |
+| Paste button in the toolbar | `term/TerminalModal.tsx` | v1 | Same. **Built (0.1.0-beta.8): terminal header.** |
 | Chunked paste: large input sent in 4 KiB slices with progress and **Cancel paste** | `term/connection.ts` (PASTE_CHUNK), `term/TerminalProvider.tsx` | v1 | Same; slicing happens in the engine, the renderer only shows progress and cancel. |
 | Paste safety warning (multi-line or very large paste, paste containing control characters) | — (new) | v1 | New: confirm dialog before sending multi-line text outside bracketed paste and before pastes over a size limit; "don't ask again" per host. **Built (Phase 2), always on, also for control characters; "don't ask again" waits for per-host settings.** |
 | OSC 52 clipboard write from programs (Claude Code inside tmux); read requests ignored; tmux `set-clipboard on` + passthrough set on attach | `term/connection.ts`, `gw/terminals/tmux-attach.ts` | v1 | Write requires a confirm per host the first time ("Allow this host to set the clipboard?") then may be remembered; reads always denied. **Built (Phase 4): "Remember my choice for this host" in the dialog, and Ask / Allow / Deny in Edit host; allowed writes show a "Copied" notice.** |

@@ -4,6 +4,33 @@ All notable changes to quqa-express. Each release's section is also the
 start of its GitHub release notes and of what the in-app update panel shows
 (`scripts/changelog.mjs`, `.github/workflows/release.yml`).
 
+## [0.1.0-beta.8] - 2026-10-22
+
+### Fixed
+
+- **Ctrl+V pastes.** In a terminal, Ctrl+V reached the server as a
+  control character (^V) instead of pasting. Now Ctrl+V, Ctrl+Shift+V and
+  Shift+Insert paste the clipboard: text exactly as copied (Georgian,
+  Mtavruli, emoji and any other Unicode), or an image (a Win+Shift+S
+  screenshot, "Copy image" in a browser) or files copied in Explorer, which
+  upload to the host and paste their path. Multi-line and risky pastes still
+  ask first, and large ones still go in slices.
+- The clipboard keys work with the **Georgian and Russian keyboard
+  layouts** too (they go by the physical key, not the letter it types).
+- Georgian text no longer turns into `_` in resumable (tmux) sessions on
+  hosts whose login has no UTF-8 locale.
+
+### Added
+
+- **Paste** button in the terminal header (right click pastes too).
+- Ctrl+C copies while text is selected (and clears the selection); with
+  nothing selected it still interrupts the program. Ctrl+Insert copies.
+
+### Security
+
+- The app reads the clipboard only right after you press a key or click in
+  its window, never on its own.
+
 ## [0.1.0-beta.7] - 2026-10-21
 
 The 0.1.0-beta.6 tag was never published: its Windows test showed that

@@ -47,7 +47,7 @@ describe('tmux commands', () => {
 
   it('attach creates or re-attaches and turns on OSC 52 passthrough', () => {
     expect(attachCommand(NAME)).toBe(
-      `tmux new-session -A -s '${NAME}' ';' 'set-option' '-s' 'set-clipboard' 'on' ';' 'set-option' '-g' 'allow-passthrough' 'on'`,
+      `tmux -u new-session -A -s '${NAME}' ';' 'set-option' '-s' 'set-clipboard' 'on' ';' 'set-option' '-g' 'allow-passthrough' 'on'`,
     );
   });
 

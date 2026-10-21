@@ -8,6 +8,7 @@ import {
   ConnectRequest,
   HostKeyAnswer,
   InputMessage,
+  MAX_CLIPBOARD_LENGTH,
   MAX_INPUT_LENGTH,
   MAX_PRIVATE_KEY_LENGTH,
   PromptAnswer,
@@ -120,6 +121,15 @@ describe('session messages', () => {
     expect(Value.Check(HostKeyAnswer, { requestId: '../k1', accept: true })).toBe(false);
     expect(Value.Check(ClipboardText, 'hello')).toBe(true);
     expect(Value.Check(ClipboardText, 42)).toBe(false);
+  });
+
+  it('carries Georgian, Mtavruli and emoji paste text exactly, within the limits', () => {
+    const georgian = 'გამარჯობა, მსოფლიო! ქართული ტექსტი — ႢႠႰႨႡ ᲒᲐᲛᲐᲠᲯᲝᲑᲐ 🇬🇪👋';
+    expect(Value.Check(ClipboardText, georgian)).toBe(true);
+    expect(Value.Check(InputMessage, { sessionId: 's1', data: georgian, encoding: 'utf8' })).toBe(
+      true,
+    );
+    expect(Value.Check(ClipboardText, 'x'.repeat(MAX_CLIPBOARD_LENGTH + 1))).toBe(false);
   });
 
   it('checks prompt answers', () => {
@@ -393,7 +403,12 @@ describe('Phase 4 calls', () => {
     expect(check('files.upload', { ...upload, conflict: 'clobber' })).toBe(false);
     expect(check('files.download', { sessionId, paths: ['/var/log/syslog'] })).toBe(true);
     expect(check('files.download', { sessionId, paths: ['/x'], folder: '/tmp' })).toBe(false);
+    // The clipboard intent names only the session: main reads the clipboard itself.
+    expect(check('files.pasteClipboard', { sessionId })).toBe(true);
     expect(check('files.pasteClipboard', { sessionId, path: '/tmp/x.png' })).toBe(false);
+    expect(check('files.pasteClipboard', { sessionId, format: 'FileNameW' })).toBe(false);
+    expect(check('files.pasteClipboard', { sessionId: '../s1' })).toBe(false);
+    expect(check('files.pasteClipboard', {})).toBe(false);
   });
 
   it('takes forwards with an explicit public opt-in and valid addresses', () => {

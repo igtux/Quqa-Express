@@ -55,9 +55,13 @@ const CLIPBOARD_ON = [
   'on',
 ] as const;
 
-/** The PTY command of a resumable terminal: create the session or re-attach to it. */
+/**
+ * The PTY command of a resumable terminal: create the session or re-attach to it.
+ * `-u`: the terminal is always UTF-8 (xterm.js), so tmux must not fall back to
+ * ASCII (Georgian shown as `_`) on a host whose login has no UTF-8 locale.
+ */
 export function attachCommand(name: string): string {
-  return sh`tmux new-session -A -s ${checked(name)} ${';'} ${CLIPBOARD_ON}`.text;
+  return sh`tmux -u new-session -A -s ${checked(name)} ${';'} ${CLIPBOARD_ON}`.text;
 }
 
 /** Ends a session ("=" asks for an exact name, not a prefix). */

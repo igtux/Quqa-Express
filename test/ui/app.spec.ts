@@ -15,6 +15,7 @@
  * runs against a throw-away profile and is told to act as if the system had
  * no key store, so the vault needs a master password.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -72,6 +73,23 @@ test.afterAll(async () => {
 });
 
 const terminalText = () => page.evaluate(() => window.__quqaTest?.text() ?? '');
+
+const GEORGIAN = 'გამარჯობა, მსოფლიო! ქართული ტექსტი — ႢႠႰႨႡ ᲒᲐᲛᲐᲠᲯᲝᲑᲐ 🇬🇪👋';
+
+/** Ctrl+<key> as a non-Latin layout reports it: real input (CDP), so main sees the gesture. */
+async function pressWithLayout(key: string, code: string, keyCode: number) {
+  const cdp = await page.context().newCDPSession(page);
+  const common = {
+    modifiers: 2,
+    key,
+    code,
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+  };
+  await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...common });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...common });
+  await cdp.detach();
+}
 const tabs = () => page.evaluate(() => window.__quqaTest?.tabs() ?? 0);
 const panes = () => page.evaluate(() => window.__quqaTest?.panes() ?? 0);
 const section = (name: string) =>
@@ -298,6 +316,39 @@ test('connects, verifies the host key, asks for the password, warns on a risky p
   expect(await terminalText()).not.toMatch(/pasted/);
   await expect(page.getByRole('textbox', { name: 'Terminal input' }).first()).toBeFocused();
 
+  // Plain Ctrl+V pastes text (it used to reach the shell as ^V): Georgian,
+  // Mtavruli and emoji arrive on the host byte for byte.
+  await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), GEORGIAN);
+  await page.keyboard.type("cat > ~/ui-paste.txt; echo ca''t-done\n");
+  await page.keyboard.press('Control+V');
+  // (The screen check stops before Mtavruli and emoji, whose widths tmux may
+  // draw differently; the checksum below covers every byte.)
+  await expect.poll(terminalText).toContain('გამარჯობა, მსოფლიო! ქართული ტექსტი');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+D');
+  await expect.poll(terminalText).toMatch(/^cat-done\s*$/m);
+  await page.keyboard.type(
+    'echo "sum-$(sha256sum < ~/ui-paste.txt | cut -c1-16)"; rm -f ~/ui-paste.txt\n',
+  );
+  const sum = createHash('sha256').update(`${GEORGIAN}\n`, 'utf8').digest('hex').slice(0, 16);
+  await expect.poll(terminalText).toMatch(new RegExp(`^sum-${sum}\\s*$`, 'm'));
+
+  // Ctrl+C with nothing selected still interrupts the program.
+  await page.keyboard.type('sleep 30\n');
+  await page.keyboard.press('Control+C');
+  await page.keyboard.type("echo int''ok\n");
+  await expect.poll(terminalText, { timeout: 5000 }).toMatch(/^intok\s*$/m);
+
+  // The header's Paste button pastes too.
+  await app.evaluate(({ clipboard }) => clipboard.writeText("echo butt''on-paste"));
+  await page
+    .locator('.terminal-window:not([hidden])')
+    .getByRole('button', { name: /^Paste: / })
+    .first()
+    .click();
+  await page.keyboard.press('Enter');
+  await expect.poll(terminalText).toMatch(/^button-paste\s*$/m);
+
   await page.keyboard.type('clear; stty size\n');
   await expect.poll(terminalText).toMatch(/^\d+ \d+\s*$/m);
   const before = (await terminalText()).match(/^(\d+) (\d+)\s*$/m)?.[0];
@@ -483,7 +534,8 @@ test('pastes an image into the terminal as an uploaded path', async () => {
     ]);
   }, PNG.toString('base64'));
   await page.locator('.terminal-window:not([hidden]) .terminal-pane.active-pane').click();
-  await page.keyboard.press('Control+Shift+V');
+  // Ctrl+V with the Georgian layout: the V key reports "ვ", as Windows sends it.
+  await pressWithLayout('ვ', 'KeyV', 86);
   await expect
     .poll(terminalText)
     .toMatch(new RegExp(`/home/${USER}/uploads/clipboard_\\d+(-\\d+)?\\.png`));

@@ -244,6 +244,15 @@ function Header({
           onClick={() => workspace.openFilesForTerminal(session.tag)}
         />
         <HeaderButton
+          icon="clipboard"
+          label="Paste: text, an image or copied files (Ctrl+V, right click)"
+          className="optional-2"
+          onClick={() => {
+            session.focus();
+            void session.pasteFromClipboard();
+          }}
+        />
+        <HeaderButton
           icon="tunnel"
           label="Port forwarding over this connection"
           className="optional-1"

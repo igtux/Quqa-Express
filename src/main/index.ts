@@ -46,6 +46,7 @@ import {
 } from '../shared/ipc.js';
 import { SettingsFile } from './app-settings.js';
 import { EngineHost } from './engine-host.js';
+import { UserGesture } from './gesture.js';
 import { Grants } from './grants.js';
 import { hardenSessions } from './security.js';
 import {
@@ -144,6 +145,8 @@ function start() {
   const vaultPath = join(app.getPath('userData'), 'vault.json');
   let broker: VaultBroker | null = null;
   const grants = new Grants();
+  /** The last key press or click in the window: clipboard reads need one (gesture.ts). */
+  const gesture = new UserGesture();
   const settings = new SettingsFile(join(app.getPath('userData'), 'settings.json'));
   const appSettings = (): AppSettings => {
     const { theme, autoUpdate } = settings.get();
@@ -259,6 +262,10 @@ function start() {
     if (!Value.Check(AppCalls[name].params, params)) {
       return { ok: false, code: 'invalid_request', message: 'Invalid request' };
     }
+    // Main reads the clipboard for an image paste only right after a key press or click.
+    if (name === 'files.pasteClipboard' && !gesture.recent()) {
+      return { ok: false, code: 'invalid_request', message: 'Paste with a key or a click' };
+    }
     // Calls about a session (files, transfers, forwards) only for the window that opened it.
     const sessionId = (params as { sessionId?: unknown }).sessionId;
     if (typeof sessionId === 'string' && owners.get(sessionId) !== event.sender.id) {
@@ -351,7 +358,7 @@ function start() {
     await clipboard.writeText(text);
   });
   ipcMain.handle(Channel.clipboardRead, async (event) => {
-    if (!trusted(event)) throw new Error('Not allowed');
+    if (!trusted(event) || !gesture.recent()) throw new Error('Not allowed');
     return (await clipboard.readText()).slice(0, MAX_CLIPBOARD_LENGTH);
   });
 
@@ -410,6 +417,7 @@ function start() {
         ...(testHooks && { additionalArguments: ['--quqa-test-hooks'] }),
       },
     });
+    window.webContents.on('input-event', (_event, input) => gesture.note(input.type));
     window.once('ready-to-show', () => {
       if (placed.maximized) window?.maximize();
       window?.show();

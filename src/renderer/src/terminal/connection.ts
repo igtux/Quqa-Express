@@ -34,7 +34,7 @@ import {
   reconnectDelayMs,
   RECONNECT_DELAYS_S,
 } from './input.js';
-import { isLetterKey } from './keys.js';
+import { clipboardAction } from './keys.js';
 import { parseOsc52 } from './osc52.js';
 import { pasteRisks, type PasteRisk } from './paste.js';
 import {
@@ -607,17 +607,22 @@ export class TerminalSession {
 
   private handleKey(event: KeyboardEvent): boolean {
     if (event.type !== 'keydown') return true;
-    const ctrl = event.ctrlKey || event.metaKey;
-    // Ctrl+Shift+V pastes, Ctrl+Shift+C copies the selection.
-    if (ctrl && event.shiftKey && isLetterKey(event, 'v')) {
+    // Ctrl+V / Ctrl+Shift+V / Shift+Insert paste; Ctrl+Shift+C / Ctrl+Insert, and
+    // Ctrl+C while text is selected, copy. By physical key, for every layout.
+    // The key's default is cancelled, so the page's own paste never runs as well:
+    // main reads the clipboard (text, or an image / copied files to upload).
+    const action = clipboardAction(event, this.term.hasSelection());
+    if (action === 'paste') {
       event.preventDefault();
-      void this.pasteFromClipboard();
+      if (!event.repeat) void this.pasteFromClipboard();
       return false;
     }
-    if (ctrl && event.shiftKey && isLetterKey(event, 'c')) {
+    if (action === 'copy') {
       event.preventDefault();
       const text = this.term.getSelection();
       if (text) void this.api.clipboardWrite(text).catch(() => undefined);
+      // Ctrl+C copied: drop the selection so the next Ctrl+C interrupts again.
+      if (!event.shiftKey && event.code !== 'Insert') this.term.clearSelection();
       return false;
     }
     return true;

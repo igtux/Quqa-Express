@@ -38,3 +38,36 @@ export function isTextField(target: EventTarget | null): boolean {
     ),
   );
 }
+
+export type ClipboardAction = 'paste' | 'copy';
+
+/**
+ * The terminal's clipboard keys, by physical key so they work with the
+ * Georgian and Russian layouts too (Ctrl+V there reports `key: "ვ"` / `"м"`):
+ *
+ * - Ctrl+V, Ctrl+Shift+V and Shift+Insert paste (text, or an image / copied
+ *   files, which upload). Like Jarvis, Ctrl+V pastes rather than sending ^V.
+ * - Ctrl+Shift+C and Ctrl+Insert copy the selection.
+ * - Ctrl+C copies only while text is selected; otherwise it stays ^C (SIGINT).
+ *
+ * Alt is never part of these: AltGr is Ctrl+Alt on Windows and types letters.
+ */
+export function clipboardAction(
+  event: KeyboardEvent,
+  hasSelection: boolean,
+): ClipboardAction | null {
+  if (event.altKey) return null;
+  const ctrl = event.ctrlKey || event.metaKey;
+  if (event.code === 'Insert' || event.key === 'Insert') {
+    if (event.shiftKey && !ctrl) return 'paste';
+    if (ctrl && !event.shiftKey) return 'copy';
+    return null;
+  }
+  if (!ctrl) return null;
+  if (isLetterKey(event, 'v')) return 'paste';
+  if (isLetterKey(event, 'c')) {
+    if (event.shiftKey) return 'copy';
+    return hasSelection ? 'copy' : null;
+  }
+  return null;
+}
