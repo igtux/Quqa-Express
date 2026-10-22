@@ -264,7 +264,8 @@ test('adds, validates, searches, duplicates and deletes hosts', async () => {
   if (HOST) await expect(card.locator('.ssh-card-latency')).toHaveText(/^\d+ ms$/);
 
   // Duplicate, then search, then delete the copy.
-  await card.getByRole('button', { name: `Duplicate ${HOST_NAME}` }).click();
+  await card.getByRole('button', { name: `More for ${HOST_NAME}` }).click();
+  await page.getByRole('menuitem', { name: 'Duplicate…' }).click();
   const copy = page.getByRole('dialog', { name: `Duplicate ${HOST_NAME}` });
   await copy.getByLabel('Name').fill('scratch copy');
   await copy.getByRole('button', { name: 'Add host' }).click();
@@ -274,7 +275,8 @@ test('adds, validates, searches, duplicates and deletes hosts', async () => {
   await page.getByLabel('Search hosts').fill('tag:docker');
   await expect(page.getByTestId('host-card')).toHaveCount(2);
   await page.getByLabel('Search hosts').fill('');
-  await page.getByRole('button', { name: 'Delete scratch copy' }).click();
+  await page.getByRole('button', { name: 'More for scratch copy' }).click();
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
   await page
     .getByRole('dialog', { name: 'Delete scratch copy?' })
     .getByRole('button', { name: 'Delete' })
@@ -614,7 +616,8 @@ test('keeps hosts and secrets sealed in the vault file', async () => {
 });
 
 test('locks and unlocks the vault over open terminals', async () => {
-  await page.getByRole('button', { name: 'Lock', exact: true }).click();
+  await page.getByRole('button', { name: 'Main menu' }).click();
+  await page.getByRole('menuitem', { name: 'Lock' }).click();
   const form = page.getByRole('form', { name: 'Unlock vault' });
   await expect(form).toBeVisible();
   await form.getByLabel('Master password').fill('wrong password');

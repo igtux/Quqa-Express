@@ -1,8 +1,8 @@
 /**
  * The hosts screen (the SSH Manager): a compact status line, search and
  * group filter, collapsible groups, host cards with Open Terminal, Files,
- * Sessions, Install key, Edit, Duplicate, Ping, favorite and Delete; Add
- * host, Quick Connect and the ~/.ssh/config import.
+ * Sessions and favorite, and a More menu (Ping, Install key, Edit,
+ * Duplicate, Delete); Add host, Quick Connect and the ~/.ssh/config import.
  *
  * Ported from Jarvis NG (apps/web/src/machines/SshManager.tsx, host cards,
  * latency cached 20 s, Ping all; groups from legacy-ui 03a §5.4), same owner.
@@ -13,6 +13,7 @@ import type { HostInfo, KeyInfo } from '../../../shared/ipc.js';
 import { call, errorText, messageOf } from '../api.js';
 import { Dialog } from '../components/Dialog.js';
 import { Icon } from '../components/icons.js';
+import { below, Menu } from '../components/Menu.js';
 import { formatIdle } from '../terminal/dockModel.js';
 import type { Workspace } from '../terminal/workspace.js';
 import { EMPTY_HOST, HostForm, inputOf } from './HostForm.js';
@@ -391,9 +392,10 @@ function HostCard({
   onDelete(): void;
 }) {
   const status = hostStatus(latency, checking);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   return (
     <li
-      className={`ssh-host-card ${status}`}
+      className={`ssh-host-card ${status}${menu ? ' menu-open' : ''}`}
       style={host.color ? ({ '--host-color': host.color } as React.CSSProperties) : undefined}
       data-testid="host-card"
       aria-label={host.name}
@@ -475,51 +477,44 @@ function HostCard({
         </button>
         <button
           type="button"
-          className="ssh-card-btn"
-          title="Ping"
-          aria-label={`Ping ${host.name}`}
-          onClick={onPing}
+          className={`ssh-card-btn${menu ? ' on' : ''}`}
+          title="More: ping, install a key, edit, duplicate, delete"
+          aria-label={`More for ${host.name}`}
+          aria-haspopup="menu"
+          aria-expanded={menu !== null}
+          onClick={(event) => setMenu(menu ? null : below(event.currentTarget, 'end', 250))}
         >
-          <Icon name="activity" />
+          <Icon name="more" />
         </button>
-        {host.os === 'linux' && (
-          <button
-            type="button"
-            className="ssh-card-btn"
-            title="Install a public key on this host"
-            aria-label={`Install a key on ${host.name}`}
-            onClick={onInstallKey}
-          >
-            <Icon name="key" />
-          </button>
+        {menu && (
+          <Menu
+            label={`${host.name} actions`}
+            title={host.name}
+            at={menu}
+            onClose={() => setMenu(null)}
+            entries={[
+              {
+                label: 'Ping',
+                hint: 'How fast does it answer?',
+                icon: 'activity',
+                tone: 'green',
+                onSelect: onPing,
+              },
+              host.os === 'linux' && {
+                label: 'Install a key…',
+                hint: 'Log in without a password',
+                icon: 'key',
+                tone: 'amber',
+                onSelect: onInstallKey,
+              },
+              { kind: 'separator' },
+              { label: 'Edit…', icon: 'pencil', tone: 'blue', onSelect: onEdit },
+              { label: 'Duplicate…', icon: 'copy', tone: 'violet', onSelect: onDuplicate },
+              { kind: 'separator' },
+              { label: 'Delete…', icon: 'trash', danger: true, onSelect: onDelete },
+            ]}
+          />
         )}
-        <button
-          type="button"
-          className="ssh-card-btn"
-          title="Edit"
-          aria-label={`Edit ${host.name}`}
-          onClick={onEdit}
-        >
-          <Icon name="edit" />
-        </button>
-        <button
-          type="button"
-          className="ssh-card-btn"
-          title="Duplicate"
-          aria-label={`Duplicate ${host.name}`}
-          onClick={onDuplicate}
-        >
-          <Icon name="copy" />
-        </button>
-        <button
-          type="button"
-          className="ssh-card-btn danger"
-          title="Delete"
-          aria-label={`Delete ${host.name}`}
-          onClick={onDelete}
-        >
-          <Icon name="trash" />
-        </button>
       </div>
     </li>
   );

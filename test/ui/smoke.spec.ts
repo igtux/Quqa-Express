@@ -116,13 +116,15 @@ test('Georgian text renders in the bundled Georgian fonts', async () => {
   await page.screenshot({ path: join('ui-screenshots', 'smoke-georgian-hosts.png') });
 
   // The terminal font samples and preview carry Georgian too.
-  await page.getByRole('button', { name: 'Look and notifications' }).click();
+  await page.getByRole('button', { name: 'Main menu' }).click();
+  await page.getByRole('menuitem', { name: 'Look and notifications' }).click();
   const look = page.getByRole('dialog', { name: 'Look and notifications' });
   await expect(look).toContainText('გამარჯობა, მსოფლიო');
   await page.screenshot({ path: join('ui-screenshots', 'smoke-georgian-look.png') });
   await look.getByRole('button', { name: 'Cancel' }).click();
 
-  await card.getByRole('button', { name: `Delete ${GEORGIAN_HOST}` }).click();
+  await card.getByRole('button', { name: `More for ${GEORGIAN_HOST}` }).click();
+  await page.getByRole('menuitem', { name: 'Delete…' }).click();
   await page
     .getByRole('dialog', { name: `Delete ${GEORGIAN_HOST}?` })
     .getByRole('button', { name: 'Delete' })
@@ -223,7 +225,8 @@ test('after a restart the vault opens again and the window keeps its size', asyn
 });
 
 test('"Start over" moves the vault aside and offers a new one', async () => {
-  await page.getByRole('button', { name: 'Lock', exact: true }).click();
+  await page.getByRole('button', { name: 'Main menu' }).click();
+  await page.getByRole('menuitem', { name: 'Lock' }).click();
   const unlock = page.getByRole('form', { name: 'Unlock vault' });
   await expect(unlock).toBeVisible();
   await unlock.getByRole('button', { name: /Start over$/ }).click();

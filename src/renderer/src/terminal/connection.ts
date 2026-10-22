@@ -34,6 +34,7 @@ import {
   reconnectDelayMs,
   RECONNECT_DELAYS_S,
 } from './input.js';
+import { glyphAtlas, watchFonts } from './glyphs.js';
 import { clipboardAction } from './keys.js';
 import { parseOsc52 } from './osc52.js';
 import { pasteRisks, type PasteRisk } from './paste.js';
@@ -282,8 +283,6 @@ export class TerminalSession {
   private lastError: { code: SshErrorCode; message: string } | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private webgl: WebglAddon | null = null;
-  /** A font finished loading: glyphs drawn with a fallback are drawn again. */
-  private readonly onFontsLoaded = () => this.redrawGlyphs();
 
   constructor(
     api: QuqaApi,
@@ -535,8 +534,9 @@ export class TerminalSession {
       this.resizeObserver.observe(this.element);
       // Georgian comes from bundled unicode-range fonts; once they are in,
       // the WebGL atlas must drop any glyph it cached from a fallback font.
-      document.fonts.addEventListener('loadingdone', this.onFontsLoaded);
-      void loadGeorgianFonts().then(this.onFontsLoaded);
+      // The atlas is shared, so every terminal redraws (glyphs.ts).
+      glyphAtlas.add(this);
+      watchFonts(loadGeorgianFonts);
     }
     this.fitNow();
   }
@@ -552,7 +552,11 @@ export class TerminalSession {
     this.update({ renderer: 'dom' });
   }
 
-  private redrawGlyphs() {
+  /**
+   * Called for every terminal at once by `glyphAtlas.invalidate()`: the WebGL
+   * atlas is shared, so a terminal must never clear it on its own.
+   */
+  redrawGlyphs(): void {
     if (!this.opened || this.disposed) return;
     this.term.clearTextureAtlas();
     this.term.refresh(0, this.term.rows - 1);
@@ -569,6 +573,7 @@ export class TerminalSession {
     this.visible = visible;
     if (visible) {
       this.clearAttention();
+      if (this.opened && !this.disposed) this.term.refresh(0, this.term.rows - 1);
       this.scheduleFit(30);
     }
   }
@@ -1188,7 +1193,7 @@ export class TerminalSession {
     if (this.sessionId) this.api.disconnect(this.sessionId);
     this.unlisten?.();
     this.resizeObserver?.disconnect();
-    document.fonts.removeEventListener('loadingdone', this.onFontsLoaded);
+    glyphAtlas.delete(this);
     this.term.dispose();
     this.element.remove();
     this.listeners.clear();

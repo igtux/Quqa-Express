@@ -24,7 +24,8 @@ import { TerminalView } from './components/TerminalView.js';
 import { ThemeDialog } from './components/ThemeDialog.js';
 import { ResetVaultDialog, SetupScreen, UnlockScreen } from './components/VaultScreens.js';
 import { HostsPanel } from './hosts/HostsPanel.js';
-import { updates } from './updates.js';
+import { UpdatePanel } from './components/UpdatePanel.js';
+import { updates, useUpdates } from './updates.js';
 import { SessionEvents } from './terminal/connection.js';
 import { digitKey, isLetterKey, isTextField, zoomKey } from './terminal/keys.js';
 import { MAX_FAVORITES_SHOWN, Workspace } from './terminal/workspace.js';
@@ -53,6 +54,8 @@ export function App() {
   const [theme, setTheme] = useState(false);
   const [shortcuts, setShortcuts] = useState(false);
   const [about, setAbout] = useState(false);
+  const [updatePanel, setUpdatePanel] = useState(false);
+  const updateState = useUpdates();
   /** After "Start over": where the old vault was moved. */
   const [movedTo, setMovedTo] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
@@ -308,6 +311,16 @@ export function App() {
           onQuickConnect={() => setQuickConnect(true)}
           onTheme={() => setTheme(true)}
           onShortcuts={() => setShortcuts(true)}
+          onAbout={() => setAbout(true)}
+          onUpdates={() => {
+            if (updateState?.available) {
+              setUpdatePanel(true);
+              return;
+            }
+            // About shows the result (and the automatic-check setting).
+            void updates.check().catch(() => undefined);
+            setAbout(true);
+          }}
           onLock={lock}
         />
         <FavoritesBar workspace={workspace} />
@@ -400,6 +413,7 @@ export function App() {
           />
         )}
         {about && <AboutDialog onClose={() => setAbout(false)} />}
+        {updatePanel && <UpdatePanel onClose={() => setUpdatePanel(false)} />}
         {workspace.files && <FileBrowser workspace={workspace} view={workspace.files} />}
         {workspace.probes.map((probe, index) => (
           <ProbeDialogs key={index} probe={probe} onClose={() => workspace.closeProbe(probe)} />

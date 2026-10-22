@@ -91,6 +91,12 @@ jobs:
         run: pnpm test:smoke
         env:
           QUQA_APP_EXECUTABLE: ${{ github.workspace }}\release\smoke\win-unpacked\quqa-express.exe
+      # Three PowerShell tabs at once: switching back must leave the first
+      # one drawn intact (the shared WebGL glyph atlas, 0.1.0-beta.10).
+      - name: Several local terminals in the packaged app
+        run: pnpm exec playwright test test/ui/terminals.spec.ts
+        env:
+          QUQA_APP_EXECUTABLE: ${{ github.workspace }}\release\smoke\win-unpacked\quqa-express.exe
       # Georgian text as Windows draws it (smoke-georgian-*.png).
       - uses: actions/upload-artifact@v4
         if: always()

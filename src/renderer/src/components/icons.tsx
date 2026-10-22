@@ -30,6 +30,7 @@ const PATHS = {
   import: 'M12 3v12M7 10l5 5 5-5M5 21h14',
   keyboard: 'M2 6h20v12H2zM6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10',
   more: 'M5 12h.01M12 12h.01M19 12h.01',
+  menu: 'M4 6h16M4 12h16M4 18h16',
   history: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3',
   arrowDown: 'M12 5v14M5 12l7 7 7-7',
   activity: 'M22 12h-4l-3 9L9 3l-3 9H2',

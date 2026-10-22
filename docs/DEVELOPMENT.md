@@ -22,6 +22,12 @@ docker compose -f docker/compose.yml run --rm dev pnpm check
 docker compose -f docker/compose.yml run --rm dev sh -c 'xvfb-run -a pnpm test:ui'
 ```
 
+`test/ui/terminals.spec.ts` opens three local terminals with WebGL and
+checks, pixel by pixel, that the first is still drawn intact after the
+others opened, and that a lost WebGL context falls back to the DOM
+renderer (CI runs it against the packaged Windows app too).
+`test/ui/menus.spec.ts` drives every menu (keys, placement, actions) and
+screenshots them in both themes into `ui-screenshots/menus/`.
 `test/ui/look.spec.ts` screenshots every screen in both app themes (and
 Georgian in the terminal with the WebGL and the DOM renderer) into
 `ui-screenshots/` (git-ignored; CI uploads it as an artifact). Look at

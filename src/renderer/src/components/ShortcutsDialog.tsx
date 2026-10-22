@@ -13,6 +13,7 @@ export const SHORTCUTS: [string, string][] = [
   ['Ctrl+Shift+← / →', 'Other pane'],
   ['Ctrl+Shift+W', 'Close the pane'],
   ['Ctrl+Tab / Ctrl+Shift+Tab', 'Next / previous tab'],
+  ['Right-click a tab / Shift+F10', 'The tab menu (rename, split, close…)'],
   ['Ctrl+PageDown / PageUp', 'Next / previous tab'],
   ['Alt+Shift+1…8', 'Open favorite 1…8'],
   ['Ctrl+Shift+H', 'Hosts'],

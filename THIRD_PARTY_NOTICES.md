@@ -42,6 +42,18 @@ the Georgian blocks (`styles/fonts.css`).
   is used under the CSS family name "Quqa Georgian Sans", so the Reserved
   Font Name clause does not come into play.
 
+## Icons
+
+### Lucide (menu icons)
+
+- About 40 icons from Lucide 1.61.0 (https://lucide.dev), copied as SVG
+  element data into `src/renderer/src/components/menuIcons.ts` (nothing is
+  loaded from the network). Some of them (check, info, power, terminal, x)
+  come from Feather.
+- Copyright (c) 2026 Lucide Icons and Contributors; Feather icons
+  Copyright (c) 2013-present Cole Bemis. Licence: ISC, Feather's part MIT
+  (`licenses/ISC-lucide.txt`).
+
 ## npm packages
 
 The JavaScript dependencies (Electron, React, xterm.js, ssh2, node-pty,

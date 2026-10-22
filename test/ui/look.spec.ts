@@ -251,7 +251,8 @@ test('a terminal shows Georgian in one cell per letter, with WebGL and the DOM r
 });
 
 test('dialogs, file browser and menus in the glass theme', async () => {
-  await page.getByRole('button', { name: 'Look and notifications' }).click();
+  await page.getByRole('button', { name: 'Main menu' }).click();
+  await page.getByRole('menuitem', { name: 'Look and notifications' }).click();
   const look = page.getByRole('dialog', { name: 'Look and notifications' });
   await expect(look).toBeVisible();
   await shot('09-glass-look-dialog');
@@ -285,7 +286,8 @@ test('dialogs, file browser and menus in the glass theme', async () => {
 });
 
 test('Classic is one click away and still looks like before', async () => {
-  await page.getByRole('button', { name: 'Look and notifications' }).click();
+  await page.getByRole('button', { name: 'Main menu' }).click();
+  await page.getByRole('menuitem', { name: 'Look and notifications' }).click();
   const look = page.getByRole('dialog', { name: 'Look and notifications' });
   await look.getByRole('radio', { name: /Classic/ }).click();
   await look.getByRole('button', { name: 'Apply' }).click();
@@ -300,14 +302,16 @@ test('Classic is one click away and still looks like before', async () => {
   expect(JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'))).toMatchObject({
     theme: 'classic',
   });
-  await page.getByRole('button', { name: 'Look and notifications' }).click();
+  await page.getByRole('button', { name: 'Main menu' }).click();
+  await page.getByRole('menuitem', { name: 'Look and notifications' }).click();
   await look.getByRole('radio', { name: /Liquid glass/ }).click();
   await look.getByRole('button', { name: 'Apply' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'glass');
 });
 
 test('locked: "Forgot password? Start over" moves the vault aside', async () => {
-  await page.getByRole('button', { name: 'Lock', exact: true }).click();
+  await page.getByRole('button', { name: 'Main menu' }).click();
+  await page.getByRole('menuitem', { name: 'Lock' }).click();
   const unlock = page.getByRole('form', { name: 'Unlock vault' });
   await expect(unlock).toBeVisible();
   await shot('15-glass-unlock');

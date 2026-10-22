@@ -523,3 +523,46 @@
 :root[data-theme='glass'] .update-badge {
   color: #99f6e4;
 }
+
+/* Menus: a frosted card, chips glow a little. */
+:root[data-theme='glass'] .app-menu {
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 16px;
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--glass-shadow), var(--glass-highlight);
+}
+
+:root[data-theme='glass'] .app-menu-title,
+:root[data-theme='glass'] .app-menu-footer {
+  border-color: var(--glass-border);
+  color: var(--text-secondary);
+}
+
+:root[data-theme='glass'] .app-menu-sep {
+  background: var(--glass-border);
+}
+
+:root[data-theme='glass'] .app-menu-item {
+  border-radius: 10px;
+}
+
+:root[data-theme='glass'] .app-menu-item:hover,
+:root[data-theme='glass'] .app-menu-item:focus-visible {
+  background: rgba(139, 147, 255, 0.14);
+}
+
+:root[data-theme='glass'] .app-menu-chip {
+  border-radius: 9px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+:root[data-theme='glass'] .app-menu-kbd {
+  border-color: var(--glass-border-strong);
+  color: var(--text-secondary);
+}
+
+:root[data-theme='glass'] .app-menu-setting select {
+  border-color: var(--glass-border-strong);
+  background: rgba(255, 255, 255, 0.05);
+}

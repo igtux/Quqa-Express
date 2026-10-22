@@ -20,6 +20,7 @@ import {
 import type { Workspace } from '../terminal/workspace.js';
 import { Dialog } from './Dialog.js';
 import { Icon } from './icons.js';
+import { Menu } from './Menu.js';
 
 const PREVIEW_DELAY_MS = 450;
 
@@ -364,63 +365,44 @@ function CardMenu({
   onForget(): void;
   onEnd(): void;
 }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    ref.current?.querySelector('button')?.focus();
-    const onDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) onClose();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('pointerdown', onDown, true);
-    window.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true);
-      window.removeEventListener('keydown', onKey, true);
-    };
-  }, [onClose]);
-  const left = Math.min(x, window.innerWidth - 230);
-  const top = Math.min(y, window.innerHeight - 260);
   return (
-    <div
-      ref={ref}
-      className="terminal-card-menu"
-      role="menu"
-      aria-label={`${rowName(row)} actions`}
-      style={{ left, top }}
-    >
-      <div className="terminal-card-menu-title">
-        {rowName(row)} · {row.hostName}
-      </div>
-      <button type="button" role="menuitem" onClick={onOpen}>
-        Open
-      </button>
-      <button type="button" role="menuitem" onClick={onPin}>
-        {row.pinned ? 'Unpin' : 'Pin to the favorites bar'}
-      </button>
-      <button type="button" role="menuitem" onClick={onRename}>
-        Rename…
-      </button>
-      {row.tag && (
-        <button type="button" role="menuitem" onClick={onCloseTerm}>
-          {row.session ? 'Close (keeps running on the host)' : 'Close'}
-        </button>
-      )}
-      {row.session && (
-        <button type="button" role="menuitem" onClick={onForget}>
-          Forget card
-        </button>
-      )}
-      {row.session && (
-        <button type="button" role="menuitem" className="danger" onClick={onEnd}>
-          End session on host…
-        </button>
-      )}
-    </div>
+    <Menu
+      label={`${rowName(row)} actions`}
+      title={`${rowName(row)} · ${row.hostName}`}
+      at={{ x, y }}
+      onClose={onClose}
+      entries={[
+        { label: 'Open', icon: 'open', tone: 'blue', onSelect: onOpen },
+        {
+          label: row.pinned ? 'Unpin' : 'Pin to the favorites bar',
+          icon: row.pinned ? 'pinOff' : 'pin',
+          tone: 'amber',
+          onSelect: onPin,
+        },
+        { label: 'Rename…', icon: 'pencil', tone: 'violet', onSelect: onRename },
+        { kind: 'separator' },
+        row.tag !== null && {
+          label: 'Close',
+          ...(row.session && { hint: 'Keeps running on the host' }),
+          icon: 'x',
+          tone: 'slate',
+          onSelect: onCloseTerm,
+        },
+        row.session !== null && {
+          label: 'Forget card',
+          hint: 'Hide it here; the session stays',
+          icon: 'eraser',
+          tone: 'slate',
+          onSelect: onForget,
+        },
+        row.session !== null && {
+          label: 'End session on host…',
+          icon: 'power',
+          danger: true,
+          onSelect: onEnd,
+        },
+      ]}
+    />
   );
 }
 

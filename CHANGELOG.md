@@ -4,6 +4,34 @@ All notable changes to quqa-express. Each release's section is also the
 start of its GitHub release notes and of what the in-app update panel shows
 (`scripts/changelog.mjs`, `.github/workflows/release.yml`).
 
+## [0.1.0-beta.10] - 2026-10-22
+
+### Fixed
+
+- **Opening a second terminal no longer garbles the first.** With two or
+  more tabs (local PowerShell or SSH), switching back to an earlier tab could
+  show only scattered letters and a black block. The terminals share one
+  glyph atlas on the graphics card, and a new tab cleared it without telling
+  the others; now every terminal redraws together. If the graphics card
+  drops a terminal's drawing context, it switches to the plain renderer and
+  keeps its text.
+
+### Changed
+
+- **Simpler menus with friendly icons.** One menu style everywhere: a
+  coloured icon for each action, plain words, a hint where it helps, and the
+  keyboard shortcut at the right. Arrow keys, Home/End and Escape work.
+- The top bar is calmer: **Look and notifications**, **Keyboard shortcuts**,
+  **Check for updates**, **About** and **Lock** are in the new **main menu**
+  (☰ at the top right).
+- **Right-click a tab** (or Shift+F10) for Rename, another terminal like it,
+  Split side by side / one above the other, Files, favorites, Close the other
+  tabs and Close tab.
+- Host cards show Open a terminal, Files, Sessions and the star; **Ping**,
+  **Install a key**, **Edit**, **Duplicate** and **Delete** are under **⋯**.
+- The local shells menu (the arrow next to **>_**) says what each shell is.
+- A menu opened from the sessions dock no longer lands off screen.
+
 ## [0.1.0-beta.9] - 2026-10-22
 
 ### Added
